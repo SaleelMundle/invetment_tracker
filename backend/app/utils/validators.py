@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.constants import INVESTMENT_FIELDS
 
@@ -31,7 +32,12 @@ def parse_investment_payload(payload: dict) -> tuple[dict, list[str]]:
     recorded_at = payload.get("recorded_at")
     if recorded_at:
         try:
-            values["recorded_at"] = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+            parsed_datetime = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+
+            if parsed_datetime.tzinfo is None:
+                parsed_datetime = parsed_datetime.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+
+            values["recorded_at"] = parsed_datetime.astimezone(timezone.utc)
         except ValueError:
             errors.append("Invalid datetime format for recorded_at. Use ISO format.")
 
@@ -39,11 +45,13 @@ def parse_investment_payload(payload: dict) -> tuple[dict, list[str]]:
 
 
 def compute_net_worth(values: dict) -> float:
+    loan_due = values["total_loan_taken"] - values["loan_repaid"]
+
     return (
         values["stocks"]
         + values["gold"]
         + values["bitcoin"]
         + values["cash"]
         - values["credit_card_dues"]
-        - values["loan_dues"]
+        - loan_due
     )

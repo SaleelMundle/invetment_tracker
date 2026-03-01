@@ -15,10 +15,12 @@ The application supports:
 4. Net worth calculation per entry:
 
 ```text
-net_worth = stocks + gold + bitcoin + cash - credit_card_dues - loan_dues
+loan_due = total_loan_taken - loan_repaid
+net_worth = stocks + gold + bitcoin + cash - credit_card_dues - loan_due
 ```
 
 5. Net worth history API + chart on frontend
+6. Multiple source inputs per investment type (e.g. cash from multiple banks), summed before saving
 
 ---
 

@@ -33,6 +33,32 @@ body {
   margin-bottom: 16px;
 }
 
+.top-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.nav-button {
+  background: #e2e8f0;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.nav-button.active {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.page-content {
+  width: 100%;
+}
+
+.page-card {
+  width: 100%;
+}
+
 .grid {
   display: grid;
   gap: 16px;
@@ -97,6 +123,31 @@ button.danger {
   flex-wrap: wrap;
 }
 
+.source-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.source-group-header {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.source-group-header label {
+  display: block;
+  font-weight: 600;
+}
+
+.source-list {
+  display: grid;
+  gap: 8px;
+}
+
+.source-row input {
+  flex: 1;
+}
+
 .message {
   color: #166534;
   background: #dcfce7;
@@ -137,4 +188,80 @@ td {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.asset-pie-section {
+  margin-top: 20px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+}
+
+.asset-timeline-control {
+  margin-bottom: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.asset-timeline-control input[type="range"] {
+  width: 100%;
+}
+
+.asset-pie-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.asset-pie-chart {
+  width: 100%;
+  max-width: 320px;
+  justify-self: center;
+}
+
+.asset-pie-slice {
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease, stroke-width 0.2s ease;
+}
+
+.asset-pie-legend {
+  display: grid;
+  gap: 10px;
+}
+
+.asset-pie-legend-item {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  cursor: pointer;
+  text-align: left;
+  padding: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.asset-pie-legend-item.active {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.15);
+}
+
+.asset-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.asset-pie-total {
+  margin-top: 8px;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .asset-pie-layout {
+    grid-template-columns: 1fr;
+  }
 }
