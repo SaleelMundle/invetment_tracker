@@ -4,7 +4,8 @@ INVESTMENT_FIELDS = [
     "bitcoin",
     "cash",
     "credit_card_dues",
-    "loan_dues",
+    "total_loan_taken",
+    "loan_repaid",
 ]
 
 ADMIN_USERNAME = "saleel"

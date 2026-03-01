@@ -11,18 +11,31 @@ async function request(path, options = {}, token = null) {
   }
 
   console.log(`[API] ${options.method || "GET"} ${path}`);
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
 
-  const data = await response.json();
-  if (!response.ok) {
-    console.error("[API] Request failed", data);
-    throw new Error(data.message || "Request failed");
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    console.error("[API] Network error", error);
+    throw new Error("Unable to connect to server. Please check backend and try again.");
   }
 
-  return data;
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    console.error("[API] Request failed", data);
+    throw new Error(data?.message || "Request failed");
+  }
+
+  return data || {};
 }
 
 export const api = {
