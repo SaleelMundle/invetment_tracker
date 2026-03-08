@@ -28,8 +28,10 @@ net_worth = stocks + gold + bitcoin + cash - credit_card_dues - loan_due
 
 On backend startup, a default admin is auto-created (if not already present):
 
-- **Username:** `saleel`
-- **Password:** `saleel_password`
+- **Username:** `saleel` (or `ADMIN_USERNAME` env var)
+- **Password:** `saleel_password` (or `ADMIN_PASSWORD` env var)
+
+> ⚠️ For cloud deployment, always set a strong `ADMIN_PASSWORD` in backend environment variables.
 
 ---
 
@@ -177,3 +179,100 @@ Frontend will run on: `http://localhost:5173`
 - Better admin UX for editing user metadata
 - Rich investment performance analytics and advanced charting
 - Validation hardening and automated tests
+
+---
+
+## Deploy to Cloud (Recommended: Vercel + Render + MongoDB Atlas)
+
+This setup makes your app accessible from anywhere with stable public HTTPS URLs.
+
+### Architecture
+
+- **Frontend:** Vercel (`frontend/`)
+- **Backend API:** Render Web Service (`backend/`)
+- **Database:** MongoDB Atlas
+
+---
+
+### 1) Create MongoDB Atlas database
+
+1. Go to MongoDB Atlas and create a free cluster.
+2. Create a database user (username/password).
+3. In **Network Access**, allow Render egress (for quick start you can allow `0.0.0.0/0`, then tighten later).
+4. Copy connection string and set db name to `investment_tracker` (or your preferred db name).
+
+You will use it as:
+
+```text
+MONGO_URI=mongodb+srv://<user>:<password>@<cluster-url>/?retryWrites=true&w=majority
+MONGO_DB_NAME=investment_tracker
+```
+
+---
+
+### 2) Deploy backend on Render
+
+This repo includes a root `render.yaml` blueprint.
+
+1. Push code to GitHub.
+2. In Render: **New +** → **Blueprint** → connect this repo.
+3. Render will create service `investment-tracker-api` using:
+   - `rootDir: backend`
+   - `startCommand: gunicorn run:app`
+4. In Render service environment variables, set:
+   - `MONGO_URI` = your Atlas URI
+   - `MONGO_DB_NAME` = `investment_tracker`
+   - `ADMIN_USERNAME` = your admin username
+   - `ADMIN_PASSWORD` = strong password
+   - `SESSION_DURATION_HOURS` = `24` (or your choice)
+   - `CORS_ORIGINS` = `https://<your-vercel-domain>`
+   - `FLASK_DEBUG` = `False`
+5. Deploy and verify:
+
+```text
+https://<your-render-service>.onrender.com/api/health
+```
+
+Expected response:
+
+```json
+{"status":"ok","message":"Investment tracker backend is running"}
+```
+
+---
+
+### 3) Deploy frontend on Vercel
+
+1. In Vercel: **Add New Project** → import this repo.
+2. Set **Root Directory** to `frontend`.
+3. Framework preset: **Vite**.
+4. Add environment variable:
+
+```text
+VITE_API_BASE_URL=https://<your-render-service>.onrender.com/api
+```
+
+5. Deploy.
+
+After deploy, open your Vercel URL and test login + API actions.
+
+---
+
+### 4) Final production checks
+
+- Frontend loads over HTTPS from Vercel URL.
+- Login works with your configured admin credentials.
+- `GET /api/health` works on Render.
+- Create/update/delete investment entries works.
+- Confirm `CORS_ORIGINS` is set to your Vercel domain (not `*`) in production.
+
+---
+
+### Deployment files added/updated in this repo
+
+- `render.yaml` (Render blueprint config)
+- `backend/requirements.txt` (`gunicorn` added)
+- `backend/.env.example` (cloud-ready env vars)
+- `backend/app/__init__.py` (CORS now configurable via `CORS_ORIGINS`)
+- `backend/app/constants.py` (admin/session values now env-driven)
+- `frontend/.env.example` (production API base template)

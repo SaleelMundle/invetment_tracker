@@ -18,6 +18,82 @@ body {
   padding: 20px;
 }
 
+@media (min-width: 992px) {
+  .fit-screen-page {
+    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .fit-screen-page .header,
+  .fit-screen-page .top-nav,
+  .fit-screen-page .message,
+  .fit-screen-page .error {
+    flex-shrink: 0;
+  }
+
+  .fit-screen-page .page-content {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .viewport-fit-card {
+    height: 100%;
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .viewport-fit-card h2 {
+    margin: 0 0 8px;
+    flex-shrink: 0;
+  }
+
+  .viewport-fit-card .asset-timeline-control {
+    margin-bottom: 8px;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .viewport-fit-card .asset-pie-section {
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+
+  .viewport-fit-card .asset-pie-layout {
+    grid-template-columns: minmax(180px, 240px) 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+
+  .viewport-fit-card .asset-pie-chart {
+    max-width: 230px;
+  }
+
+  .viewport-fit-card .asset-pie-legend {
+    gap: 8px;
+  }
+
+  .viewport-fit-card .asset-pie-legend-item {
+    padding: 8px;
+  }
+
+  .viewport-fit-card > div {
+    min-height: 0;
+  }
+
+  .viewport-fit-card .chart {
+    width: min(100%, 760px);
+    max-height: min(42vh, 340px);
+    display: block;
+    margin-inline: auto;
+  }
+}
+
 .centered {
   min-height: 100vh;
   display: flex;
@@ -31,6 +107,47 @@ body {
   gap: 16px;
   align-items: flex-start;
   margin-bottom: 16px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-picture-button {
+  width: 60px;
+  height: 60px;
+  border-radius: 999px;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid #cbd5e1;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+.profile-picture-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.profile-picture-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .top-nav {
@@ -101,6 +218,22 @@ button {
   font-size: 0.95rem;
 }
 
+.password-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.password-input-wrap input {
+  flex: 1;
+}
+
+.password-toggle-btn {
+  min-width: 44px;
+  padding: 10px 12px;
+  line-height: 1;
+}
+
 button {
   background: #0ea5e9;
   color: white;
@@ -110,6 +243,14 @@ button {
 
 button.secondary {
   background: #64748b;
+}
+
+button.add-source-btn {
+  background: #16a34a;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 8px 14px;
 }
 
 button.danger {
@@ -260,8 +401,54 @@ td {
   font-weight: 600;
 }
 
+.bitcoin-graphs {
+  margin-top: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.bitcoin-percent-header {
+  justify-content: space-between;
+  align-items: end;
+}
+
+.world-population-input {
+  min-width: 220px;
+}
+
+.combined-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 14px 0 18px;
+}
+
+.combined-summary-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.combined-summary-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: #334155;
+}
+
+.combined-summary-value {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
 @media (max-width: 768px) {
   .asset-pie-layout {
     grid-template-columns: 1fr;
+  }
+
+  .bitcoin-percent-header {
+    align-items: stretch;
   }
 }
