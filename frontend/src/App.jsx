@@ -1,7 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./services/api";
-import { asCurrency, defaultInvestmentForm, lakhToRupees, rupeesToLakh } from "./utils";
+import {
+  asBitcoin,
+  asCurrency,
+  asPercent,
+  defaultBitcoinForm,
+  defaultInvestmentForm,
+  lakhToRupees,
+  rupeesToLakh,
+} from "./utils";
 
 const INVESTMENT_SOURCE_FIELDS = [
   ["stocks", "Stocks"],
@@ -14,11 +22,109 @@ const INVESTMENT_SOURCE_FIELDS = [
 ];
 
 const IST_TIME_ZONE = "Asia/Kolkata";
+const DEFAULT_WORLD_POPULATION = 8200000000;
+const DEFAULT_PROFILE_PICTURE =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='60' fill='%23e2e8f0'/%3E%3Ccircle cx='60' cy='44' r='22' fill='%2394a3b8'/%3E%3Cpath d='M24 100c6-19 22-30 36-30s30 11 36 30' fill='%2394a3b8'/%3E%3C/svg%3E";
+const INVESTMENT_FORM_DRAFT_STORAGE_KEY = (userId) => `investment_tracker_investment_form_draft_${userId}`;
+const BITCOIN_FORM_DRAFT_STORAGE_KEY = (userId) => `investment_tracker_bitcoin_form_draft_${userId}`;
+const INVESTMENT_FORM_PINNED_BLANK_STORAGE_KEY = (userId) => `investment_tracker_investment_form_pinned_blank_${userId}`;
+const BITCOIN_FORM_PINNED_BLANK_STORAGE_KEY = (userId) => `investment_tracker_bitcoin_form_pinned_blank_${userId}`;
 
-const formatISTDateTime = (value) =>
-  new Date(value).toLocaleString("en-IN", {
+const readDraftFromStorage = (key, fallback) => {
+  try {
+    const rawValue = localStorage.getItem(key);
+    if (!rawValue) return fallback;
+    const parsed = JSON.parse(rawValue);
+    return parsed ?? fallback;
+  } catch (error) {
+    console.warn(`[APP] Failed to read draft for key='${key}'`, error);
+    return fallback;
+  }
+};
+
+const writeDraftToStorage = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`[APP] Failed to write draft for key='${key}'`, error);
+  }
+};
+
+const hasMeaningfulSourceEntries = (entries) =>
+  Array.isArray(entries) && entries.some((value) => String(value ?? "").trim() !== "");
+
+const hasMeaningfulInvestmentDraft = (form) =>
+  !!form && INVESTMENT_SOURCE_FIELDS.some(([field]) => hasMeaningfulSourceEntries(form[field]));
+
+const hasMeaningfulBitcoinDraft = (form) =>
+  !!form && hasMeaningfulSourceEntries(form.sources);
+
+const normalizeDateInput = (value) => {
+  if (value instanceof Date) return value;
+  if (typeof value === "string") {
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+    return new Date(hasTimezone ? value : `${value}Z`);
+  }
+  return new Date(value);
+};
+
+const formatISTDateTime = (value) => {
+  const date = normalizeDateInput(value);
+  if (Number.isNaN(date.getTime())) return "Invalid date";
+
+  return new Intl.DateTimeFormat("en-IN", {
     timeZone: IST_TIME_ZONE,
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+};
+
+const formatISTDate = (value, options = {}) => {
+  const date = normalizeDateInput(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: IST_TIME_ZONE,
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+    ...options,
+  }).format(date);
+};
+
+const getTimestamp = (value) => {
+  const time = normalizeDateInput(value).getTime();
+  return Number.isNaN(time) ? null : time;
+};
+
+const buildTimeTicks = (minTimestamp, maxTimestamp, plotWidth, paddingLeft) => {
+  const suggestedCount = Math.max(3, Math.min(7, Math.floor(plotWidth / 95)));
+
+  if (!Number.isFinite(minTimestamp) || !Number.isFinite(maxTimestamp)) {
+    return [];
+  }
+
+  if (maxTimestamp <= minTimestamp) {
+    return [
+      {
+        timestamp: minTimestamp,
+        x: paddingLeft + plotWidth / 2,
+      },
+    ];
+  }
+
+  return Array.from({ length: suggestedCount }, (_, index) => {
+    const ratio = index / Math.max(suggestedCount - 1, 1);
+    const timestamp = minTimestamp + ratio * (maxTimestamp - minTimestamp);
+    const x = paddingLeft + ratio * plotWidth;
+    return { timestamp, x };
   });
+};
 
 const toISTDateTimeLocalValue = (value) => {
   if (!value) return "";
@@ -42,35 +148,119 @@ const toISTDateTimeLocalValue = (value) => {
 };
 
 function App() {
+  const getCurrentISTDateTimeLocalValue = () => toISTDateTimeLocalValue(new Date());
+
+  const createDefaultInvestmentForm = () => ({
+    ...defaultInvestmentForm,
+    stocks: [""],
+    gold: [""],
+    bitcoin: [""],
+    cash: [""],
+    credit_card_dues: [""],
+    total_loan_taken: [""],
+    loan_repaid: [""],
+    recorded_at: getCurrentISTDateTimeLocalValue(),
+  });
+
+  const createDefaultBitcoinForm = () => ({
+    ...defaultBitcoinForm,
+    sources: [""],
+    recorded_at: getCurrentISTDateTimeLocalValue(),
+  });
+
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(null);
+  const profilePictureInputRef = useRef(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [isUploadingProfilePicture, setIsUploadingProfilePicture] = useState(false);
   const [activePage, setActivePage] = useState("add-investment");
 
   const [loginForm, setLoginForm] = useState({
-    username: "saleel",
-    password: "saleel_password",
+    username: "",
+    password: "",
   });
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   const [users, setUsers] = useState([]);
   const [newUserForm, setNewUserForm] = useState({ username: "", password: "", role: "user" });
+  const [showNewUserPassword, setShowNewUserPassword] = useState(false);
 
   const [investments, setInvestments] = useState([]);
-  const [investmentForm, setInvestmentForm] = useState(defaultInvestmentForm);
+  const [investmentForm, setInvestmentForm] = useState(() => {
+    const defaultValue = createDefaultInvestmentForm();
+    const draft = user ? readDraftFromStorage(INVESTMENT_FORM_DRAFT_STORAGE_KEY(user._id), null) : null;
+
+    if (!draft || typeof draft !== "object") {
+      return defaultValue;
+    }
+
+    const normalized = { ...defaultValue, ...draft };
+    INVESTMENT_SOURCE_FIELDS.forEach(([field]) => {
+      normalized[field] = hasMeaningfulSourceEntries(draft[field])
+        ? draft[field].map((value) => String(value ?? ""))
+        : [""];
+    });
+
+    normalized.recorded_at = typeof draft.recorded_at === "string"
+      ? draft.recorded_at
+      : defaultValue.recorded_at;
+
+    return normalized;
+  });
   const [editingInvestmentId, setEditingInvestmentId] = useState("");
+  const [isInvestmentFormPinnedBlank, setIsInvestmentFormPinnedBlank] = useState(() =>
+    user ? Boolean(readDraftFromStorage(INVESTMENT_FORM_PINNED_BLANK_STORAGE_KEY(user._id), false)) : false
+  );
   const [history, setHistory] = useState([]);
   const [assetTimelineIndex, setAssetTimelineIndex] = useState(0);
+  const [bitcoinForm, setBitcoinForm] = useState(() => {
+    const defaultValue = createDefaultBitcoinForm();
+    const draft = user ? readDraftFromStorage(BITCOIN_FORM_DRAFT_STORAGE_KEY(user._id), null) : null;
+
+    if (!draft || typeof draft !== "object") {
+      return defaultValue;
+    }
+
+    return {
+      ...defaultValue,
+      ...draft,
+      sources: hasMeaningfulSourceEntries(draft.sources)
+        ? draft.sources.map((value) => String(value ?? ""))
+        : [""],
+      recorded_at: typeof draft.recorded_at === "string"
+        ? draft.recorded_at
+        : defaultValue.recorded_at,
+    };
+  });
+  const [isBitcoinFormPinnedBlank, setIsBitcoinFormPinnedBlank] = useState(() =>
+    user ? Boolean(readDraftFromStorage(BITCOIN_FORM_PINNED_BLANK_STORAGE_KEY(user._id), false)) : false
+  );
+  const [bitcoinHoldings, setBitcoinHoldings] = useState([]);
+  const [bitcoinHistory, setBitcoinHistory] = useState([]);
+  const [bitcoinTopPercentHistory, setBitcoinTopPercentHistory] = useState([]);
+  const [worldPopulation, setWorldPopulation] = useState(String(DEFAULT_WORLD_POPULATION));
+  const [combinedSummary, setCombinedSummary] = useState(null);
+  const [combinedNetWorthHistory, setCombinedNetWorthHistory] = useState([]);
+  const [combinedAssetTimeline, setCombinedAssetTimeline] = useState([]);
+  const [combinedAssetTimelineIndex, setCombinedAssetTimelineIndex] = useState(0);
+  const [combinedBitcoinHistory, setCombinedBitcoinHistory] = useState([]);
+  const [combinedBitcoinTopPercentHistory, setCombinedBitcoinTopPercentHistory] = useState([]);
 
   const isAdmin = user?.role === "admin";
 
   const navItems = [
     { key: "add-investment", label: "Add Investment" },
+    { key: "bitcoin-holdings", label: "Bitcoin Holdings" },
     { key: "net-worth-trend", label: "Net Worth Trend" },
     { key: "asset-allocation", label: "Asset Allocation" },
     { key: "investment-history", label: "Investment History (₹ Lakh)" },
+    { key: "combined-stats", label: "Combined Statistics" },
     ...(isAdmin ? [{ key: "manage-users", label: "Admin - Manage Users" }] : []),
   ];
+
+  const isViewportFitTab =
+    activePage === "net-worth-trend" || activePage === "asset-allocation";
 
   useEffect(() => {
     if (!token) return;
@@ -82,10 +272,44 @@ function App() {
     if (!token || !user) return;
     loadInvestments();
     loadNetWorthHistory();
+    loadBitcoinHoldings();
+    loadBitcoinHistory();
+    loadBitcoinTopPercentHistory(worldPopulation);
+    loadCombinedData(worldPopulation);
     if (isAdmin) {
       loadUsers();
     }
   }, [token, user]);
+
+  useEffect(() => {
+    if (!token || !user) return;
+    loadBitcoinTopPercentHistory(worldPopulation);
+    loadCombinedBitcoinTopPercentHistory(worldPopulation);
+  }, [worldPopulation]);
+
+  useEffect(() => {
+    if (user) {
+      writeDraftToStorage(INVESTMENT_FORM_DRAFT_STORAGE_KEY(user._id), investmentForm);
+    }
+  }, [investmentForm, user]);
+
+  useEffect(() => {
+    if (user) {
+      writeDraftToStorage(INVESTMENT_FORM_PINNED_BLANK_STORAGE_KEY(user._id), isInvestmentFormPinnedBlank);
+    }
+  }, [isInvestmentFormPinnedBlank, user]);
+
+  useEffect(() => {
+    if (user) {
+      writeDraftToStorage(BITCOIN_FORM_DRAFT_STORAGE_KEY(user._id), bitcoinForm);
+    }
+  }, [bitcoinForm, user]);
+
+  useEffect(() => {
+    if (user) {
+      writeDraftToStorage(BITCOIN_FORM_PINNED_BLANK_STORAGE_KEY(user._id), isBitcoinFormPinnedBlank);
+    }
+  }, [isBitcoinFormPinnedBlank, user]);
 
   useEffect(() => {
     if (!isAdmin && activePage === "manage-users") {
@@ -97,6 +321,33 @@ function App() {
     if (!history.length) return 0;
     return history[history.length - 1].net_worth;
   }, [history]);
+
+  const latestBitcoin = useMemo(() => {
+    if (!bitcoinHistory.length) return 0;
+    return bitcoinHistory[bitcoinHistory.length - 1].bitcoin;
+  }, [bitcoinHistory]);
+
+  const latestTopPercent = useMemo(() => {
+    if (!bitcoinTopPercentHistory.length) return null;
+    return bitcoinTopPercentHistory[bitcoinTopPercentHistory.length - 1].top_percent;
+  }, [bitcoinTopPercentHistory]);
+
+  const worldPopulationValue = useMemo(() => Number(worldPopulation || 0), [worldPopulation]);
+
+  const combinedLatestNetWorth = useMemo(() => {
+    if (!combinedNetWorthHistory.length) return 0;
+    return combinedNetWorthHistory[combinedNetWorthHistory.length - 1].net_worth;
+  }, [combinedNetWorthHistory]);
+
+  const combinedLatestBitcoin = useMemo(() => {
+    if (!combinedBitcoinHistory.length) return 0;
+    return combinedBitcoinHistory[combinedBitcoinHistory.length - 1].bitcoin;
+  }, [combinedBitcoinHistory]);
+
+  const combinedLatestTopPercent = useMemo(() => {
+    if (!combinedBitcoinTopPercentHistory.length) return null;
+    return combinedBitcoinTopPercentHistory[combinedBitcoinTopPercentHistory.length - 1].top_percent;
+  }, [combinedBitcoinTopPercentHistory]);
 
   const investmentsByRecordedDate = useMemo(() => {
     const getTimeValue = (value) => {
@@ -127,6 +378,108 @@ function App() {
     return investmentsByRecordedDate[clampedIndex] || null;
   }, [assetTimelineIndex, investmentsByRecordedDate]);
 
+  const latestInvestmentEntry = useMemo(() => {
+    if (!investmentsByRecordedDate.length) return null;
+    return investmentsByRecordedDate[investmentsByRecordedDate.length - 1] || null;
+  }, [investmentsByRecordedDate]);
+
+  const combinedTimelineByRecordedDate = useMemo(() => {
+    const getTimeValue = (value) => {
+      const time = new Date(value?.recorded_at).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+
+    return [...combinedAssetTimeline].sort((a, b) => getTimeValue(a) - getTimeValue(b));
+  }, [combinedAssetTimeline]);
+
+  useEffect(() => {
+    if (!combinedTimelineByRecordedDate.length) {
+      setCombinedAssetTimelineIndex(0);
+      return;
+    }
+
+    setCombinedAssetTimelineIndex(combinedTimelineByRecordedDate.length - 1);
+  }, [combinedTimelineByRecordedDate.length]);
+
+  const selectedCombinedEntry = useMemo(() => {
+    if (!combinedTimelineByRecordedDate.length) return null;
+
+    const clampedIndex = Math.min(
+      Math.max(combinedAssetTimelineIndex, 0),
+      combinedTimelineByRecordedDate.length - 1
+    );
+
+    return combinedTimelineByRecordedDate[clampedIndex] || null;
+  }, [combinedAssetTimelineIndex, combinedTimelineByRecordedDate]);
+
+  const latestBitcoinHoldingEntry = useMemo(() => {
+    if (!bitcoinHoldings.length) return null;
+
+    const getTimeValue = (value) => {
+      const time = new Date(value?.recorded_at).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+
+    return [...bitcoinHoldings].sort((a, b) => getTimeValue(a) - getTimeValue(b))[bitcoinHoldings.length - 1] || null;
+  }, [bitcoinHoldings]);
+
+  const createInvestmentFormFromEntry = (investment, options = {}) => {
+    const { preserveRecordedAt = false } = options;
+
+    if (!investment) {
+      return createDefaultInvestmentForm();
+    }
+
+    const totalLoanTaken = investment.total_loan_taken ?? investment.loan_dues ?? 0;
+    const loanRepaid = investment.loan_repaid ?? 0;
+
+    return {
+      stocks: [String(rupeesToLakh(investment.stocks))],
+      gold: [String(rupeesToLakh(investment.gold))],
+      bitcoin: [String(rupeesToLakh(investment.bitcoin))],
+      cash: [String(rupeesToLakh(investment.cash))],
+      credit_card_dues: [String(rupeesToLakh(investment.credit_card_dues))],
+      total_loan_taken: [String(rupeesToLakh(totalLoanTaken))],
+      loan_repaid: [String(rupeesToLakh(loanRepaid))],
+      recorded_at: preserveRecordedAt
+        ? toISTDateTimeLocalValue(investment.recorded_at)
+        : getCurrentISTDateTimeLocalValue(),
+    };
+  };
+
+  const createBitcoinFormFromEntry = (holding, options = {}) => {
+    const { preserveRecordedAt = false } = options;
+
+    if (!holding) {
+      return createDefaultBitcoinForm();
+    }
+
+    const sources =
+      Array.isArray(holding.sources) && holding.sources.length
+        ? holding.sources.map((source) => String(source))
+        : [String(holding.bitcoin || "")];
+
+    return {
+      sources,
+      recorded_at: preserveRecordedAt
+        ? toISTDateTimeLocalValue(holding.recorded_at)
+        : getCurrentISTDateTimeLocalValue(),
+    };
+  };
+
+  useEffect(() => {
+    if (editingInvestmentId) return;
+    if (isInvestmentFormPinnedBlank) return;
+    if (hasMeaningfulInvestmentDraft(investmentForm)) return;
+    setInvestmentForm(createInvestmentFormFromEntry(latestInvestmentEntry));
+  }, [latestInvestmentEntry, editingInvestmentId, investmentForm, isInvestmentFormPinnedBlank]);
+
+  useEffect(() => {
+    if (isBitcoinFormPinnedBlank) return;
+    if (hasMeaningfulBitcoinDraft(bitcoinForm)) return;
+    setBitcoinForm(createBitcoinFormFromEntry(latestBitcoinHoldingEntry));
+  }, [latestBitcoinHoldingEntry, bitcoinForm, isBitcoinFormPinnedBlank]);
+
   const assetPieData = useMemo(() => {
     if (!selectedInvestmentEntry) {
       return { total: 0, slices: [] };
@@ -149,9 +502,36 @@ function App() {
     };
   }, [selectedInvestmentEntry]);
 
+  const combinedAssetPieData = useMemo(() => {
+    if (!selectedCombinedEntry) {
+      return { total: 0, slices: [] };
+    }
+
+    const slices = [
+      { key: "stocks", label: "Stocks", color: "#0ea5e9", value: Number(selectedCombinedEntry.stocks || 0) },
+      { key: "gold", label: "Gold", color: "#f59e0b", value: Number(selectedCombinedEntry.gold || 0) },
+      { key: "bitcoin", label: "Bitcoin", color: "#f97316", value: Number(selectedCombinedEntry.bitcoin || 0) },
+    ];
+
+    const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+
+    return {
+      total,
+      slices: slices.map((slice) => ({
+        ...slice,
+        percentage: total > 0 ? (slice.value / total) * 100 : 0,
+      })),
+    };
+  }, [selectedCombinedEntry]);
+
   const resetAlerts = () => {
     setMessage("");
     setError("");
+  };
+
+  const showFormSubmissionPopup = (text, isSuccess = true) => {
+    const title = isSuccess ? "Success" : "Submission failed";
+    window.alert(`${title}: ${text}`);
   };
 
   const loadCurrentUser = async (authToken) => {
@@ -194,6 +574,90 @@ function App() {
     }
   };
 
+  const loadBitcoinHoldings = async () => {
+    try {
+      const response = await api.listBitcoinHoldings(token);
+      setBitcoinHoldings(response.holdings || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const loadBitcoinHistory = async () => {
+    try {
+      const response = await api.getBitcoinHistory(token);
+      setBitcoinHistory(response.history || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const loadBitcoinTopPercentHistory = async (populationValue) => {
+    try {
+      const numericPopulation = Number(populationValue || 0);
+      if (!numericPopulation) {
+        setBitcoinTopPercentHistory([]);
+        return;
+      }
+
+      const response = await api.getBitcoinTopPercentHistory(token, numericPopulation);
+      setBitcoinTopPercentHistory(response.history || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const loadCombinedBitcoinTopPercentHistory = async (populationValue) => {
+    try {
+      const numericPopulation = Number(populationValue || 0);
+      if (!numericPopulation) {
+        setCombinedBitcoinTopPercentHistory([]);
+        return;
+      }
+
+      const response = await api.getCombinedBitcoinTopPercentHistory(token, numericPopulation);
+      setCombinedBitcoinTopPercentHistory(response.history || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const loadCombinedData = async (populationValue) => {
+    try {
+      const numericPopulation = Number(populationValue || 0);
+
+      const [
+        investmentSummaryResponse,
+        netWorthHistoryResponse,
+        assetTimelineResponse,
+        bitcoinSummaryResponse,
+        bitcoinHistoryResponse,
+        bitcoinTopPercentResponse,
+      ] = await Promise.all([
+        api.getCombinedInvestmentSummary(token),
+        api.getCombinedNetWorthHistory(token),
+        api.getCombinedAssetTimeline(token),
+        api.getCombinedBitcoinSummary(token),
+        api.getCombinedBitcoinHistory(token),
+        numericPopulation
+          ? api.getCombinedBitcoinTopPercentHistory(token, numericPopulation)
+          : Promise.resolve({ history: [] }),
+      ]);
+
+      setCombinedSummary({
+        investment: investmentSummaryResponse.summary || null,
+        bitcoin: bitcoinSummaryResponse.summary || null,
+      });
+      setCombinedNetWorthHistory(netWorthHistoryResponse.history || []);
+      setCombinedAssetTimeline(assetTimelineResponse.timeline || []);
+      setCombinedBitcoinHistory(bitcoinHistoryResponse.history || []);
+      setCombinedBitcoinTopPercentHistory(bitcoinTopPercentResponse.history || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+
   const handleLogin = async (event) => {
     event.preventDefault();
     try {
@@ -202,10 +666,13 @@ function App() {
       setToken(response.token);
       localStorage.setItem("token", response.token);
       setUser(response.user);
-      setMessage(`Welcome ${response.user.username}!`);
+      const successMessage = `Welcome ${response.user.username}!`;
+      setMessage(successMessage);
+      showFormSubmissionPopup(successMessage, true);
       console.log("[APP] Login successful");
     } catch (err) {
       setError(err.message);
+      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -215,6 +682,18 @@ function App() {
     setUsers([]);
     setInvestments([]);
     setHistory([]);
+    setIsInvestmentFormPinnedBlank(false);
+    setBitcoinForm(createDefaultBitcoinForm());
+    setIsBitcoinFormPinnedBlank(false);
+    setBitcoinHoldings([]);
+    setBitcoinHistory([]);
+    setBitcoinTopPercentHistory([]);
+    setCombinedSummary(null);
+    setCombinedNetWorthHistory([]);
+    setCombinedAssetTimeline([]);
+    setCombinedAssetTimelineIndex(0);
+    setCombinedBitcoinHistory([]);
+    setCombinedBitcoinTopPercentHistory([]);
     localStorage.removeItem("token");
   };
 
@@ -236,11 +715,14 @@ function App() {
     try {
       resetAlerts();
       await api.createUser(token, newUserForm);
-      setMessage("User created successfully");
+      const successMessage = "User created successfully";
+      setMessage(successMessage);
+      showFormSubmissionPopup(successMessage, true);
       setNewUserForm({ username: "", password: "", role: "user" });
       loadUsers();
     } catch (err) {
       setError(err.message);
+      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -282,6 +764,7 @@ function App() {
   });
 
   const updateSourceValue = (field, index, value) => {
+    setIsInvestmentFormPinnedBlank(true);
     setInvestmentForm((prev) => ({
       ...prev,
       [field]: prev[field].map((entry, entryIndex) => (entryIndex === index ? value : entry)),
@@ -289,6 +772,7 @@ function App() {
   };
 
   const addSourceInput = (field) => {
+    setIsInvestmentFormPinnedBlank(true);
     setInvestmentForm((prev) => ({
       ...prev,
       [field]: [...prev[field], ""],
@@ -296,6 +780,7 @@ function App() {
   };
 
   const removeSourceInput = (field, index) => {
+    setIsInvestmentFormPinnedBlank(true);
     setInvestmentForm((prev) => {
       const filtered = prev[field].filter((_, entryIndex) => entryIndex !== index);
       return {
@@ -313,37 +798,33 @@ function App() {
 
       if (editingInvestmentId) {
         await api.updateInvestment(token, editingInvestmentId, payload);
-        setMessage("Investment updated successfully");
+        const successMessage = "Investment updated successfully";
+        setMessage(successMessage);
+        showFormSubmissionPopup(successMessage, true);
       } else {
         await api.createInvestment(token, payload);
-        setMessage("Investment saved successfully");
+        const successMessage = "Investment saved successfully";
+        setMessage(successMessage);
+        showFormSubmissionPopup(successMessage, true);
       }
 
-      setInvestmentForm(defaultInvestmentForm);
+      setIsInvestmentFormPinnedBlank(false);
+      setInvestmentForm(createDefaultInvestmentForm());
       setEditingInvestmentId("");
       loadInvestments();
       loadNetWorthHistory();
+      loadCombinedData(worldPopulation);
     } catch (err) {
       setError(err.message);
+      showFormSubmissionPopup(err.message, false);
     }
   };
 
   const startEditInvestment = (investment) => {
-    const totalLoanTaken = investment.total_loan_taken ?? investment.loan_dues ?? 0;
-    const loanRepaid = investment.loan_repaid ?? 0;
-
     setEditingInvestmentId(investment._id);
     setActivePage("add-investment");
-    setInvestmentForm({
-      stocks: [String(rupeesToLakh(investment.stocks))],
-      gold: [String(rupeesToLakh(investment.gold))],
-      bitcoin: [String(rupeesToLakh(investment.bitcoin))],
-      cash: [String(rupeesToLakh(investment.cash))],
-      credit_card_dues: [String(rupeesToLakh(investment.credit_card_dues))],
-      total_loan_taken: [String(rupeesToLakh(totalLoanTaken))],
-      loan_repaid: [String(rupeesToLakh(loanRepaid))],
-      recorded_at: toISTDateTimeLocalValue(investment.recorded_at),
-    });
+    setIsInvestmentFormPinnedBlank(false);
+    setInvestmentForm(createInvestmentFormFromEntry(investment, { preserveRecordedAt: true }));
   };
 
   const handleDeleteInvestment = async (investmentId) => {
@@ -353,8 +834,104 @@ function App() {
       setMessage("Investment deleted successfully");
       loadInvestments();
       loadNetWorthHistory();
+      loadCombinedData(worldPopulation);
     } catch (err) {
       setError(err.message);
+    }
+  };
+
+  const normalizeBitcoinPayload = () => ({
+    sources: bitcoinForm.sources,
+    recorded_at: bitcoinForm.recorded_at || undefined,
+  });
+
+  const updateBitcoinSourceValue = (index, value) => {
+    setIsBitcoinFormPinnedBlank(true);
+    setBitcoinForm((prev) => ({
+      ...prev,
+      sources: prev.sources.map((entry, entryIndex) => (entryIndex === index ? value : entry)),
+    }));
+  };
+
+  const addBitcoinSourceInput = () => {
+    setIsBitcoinFormPinnedBlank(true);
+    setBitcoinForm((prev) => ({
+      ...prev,
+      sources: [...prev.sources, ""],
+    }));
+  };
+
+  const removeBitcoinSourceInput = (index) => {
+    setIsBitcoinFormPinnedBlank(true);
+    setBitcoinForm((prev) => {
+      const filtered = prev.sources.filter((_, entryIndex) => entryIndex !== index);
+      return {
+        ...prev,
+        sources: filtered.length ? filtered : [""],
+      };
+    });
+  };
+
+  const handleBitcoinSubmit = async (event) => {
+    event.preventDefault();
+    try {
+      resetAlerts();
+      const payload = normalizeBitcoinPayload();
+      await api.createBitcoinHolding(token, payload);
+      const successMessage = "Bitcoin holding saved successfully";
+      setMessage(successMessage);
+      showFormSubmissionPopup(successMessage, true);
+      setIsBitcoinFormPinnedBlank(false);
+      setBitcoinForm(createDefaultBitcoinForm());
+      loadBitcoinHoldings();
+      loadBitcoinHistory();
+      loadBitcoinTopPercentHistory(worldPopulation);
+      loadCombinedData(worldPopulation);
+    } catch (err) {
+      setError(err.message);
+      showFormSubmissionPopup(err.message, false);
+    }
+  };
+
+  const setInvestmentFormBlank = () => {
+    setEditingInvestmentId("");
+    setIsInvestmentFormPinnedBlank(true);
+    setInvestmentForm(createDefaultInvestmentForm());
+  };
+
+  const setBitcoinFormBlank = () => {
+    setIsBitcoinFormPinnedBlank(true);
+    setBitcoinForm(createDefaultBitcoinForm());
+  };
+
+  const getProfilePictureSrc = (profilePictureUrl) => {
+    if (!profilePictureUrl) {
+      return DEFAULT_PROFILE_PICTURE;
+    }
+
+    return profilePictureUrl;
+  };
+
+  const handleProfilePictureSelect = async (event) => {
+    const selectedFile = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!selectedFile) return;
+    if (!selectedFile.type?.startsWith("image/")) {
+      setError("Please select a valid image file.");
+      return;
+    }
+
+    try {
+      resetAlerts();
+      setIsUploadingProfilePicture(true);
+      const response = await api.uploadProfilePicture(token, selectedFile);
+      setUser(response.user);
+      setMessage("Profile picture updated successfully");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsUploadingProfilePicture(false);
     }
   };
 
@@ -376,34 +953,71 @@ function App() {
             </label>
             <label>
               Password
-              <input
-                type="password"
-                value={loginForm.password}
-                onChange={(event) =>
-                  setLoginForm((prev) => ({ ...prev, password: event.target.value }))
-                }
-              />
+              <div className="password-input-wrap">
+                <input
+                  type={showLoginPassword ? "text" : "password"}
+                  value={loginForm.password}
+                  onChange={(event) =>
+                    setLoginForm((prev) => ({ ...prev, password: event.target.value }))
+                  }
+                />
+                <button
+                  type="button"
+                  className="secondary password-toggle-btn"
+                  aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                  title={showLoginPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowLoginPassword((prev) => !prev)}
+                >
+                  {showLoginPassword ? "🙈" : "👁"}
+                </button>
+              </div>
             </label>
             <button type="submit">Login</button>
           </form>
           {error && <p className="error">{error}</p>}
-          <p className="hint">Default admin: saleel / saleel_password</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="page">
+    <div className={`page ${isViewportFitTab ? "fit-screen-page" : ""}`}>
       <header className="header">
-        <div>
-          <h1>Investment Tracker Dashboard</h1>
-          <p>
-            Logged in as <strong>{user.username}</strong> ({user.role})
-          </p>
-          <p>
-            Latest Net Worth: <strong>{asCurrency(latestNetWorth)}</strong>
-          </p>
+        <div className="user-info">
+          <button
+            type="button"
+            className="profile-picture-button"
+            title={isUploadingProfilePicture ? "Uploading..." : "Upload / change profile picture"}
+            onClick={() => profilePictureInputRef.current?.click()}
+            disabled={isUploadingProfilePicture}
+          >
+            <img
+              src={getProfilePictureSrc(user.profile_picture_url)}
+              alt={`${user.username} profile picture`}
+              className="profile-picture-image"
+            />
+          </button>
+          <input
+            ref={profilePictureInputRef}
+            type="file"
+            accept="image/*"
+            className="visually-hidden"
+            onChange={handleProfilePictureSelect}
+          />
+          <div>
+            <h1>Investment Tracker Dashboard</h1>
+            <p>
+              Logged in as <strong>{user.username}</strong> ({user.role})
+            </p>
+            <p>
+              Latest Net Worth: <strong>{asCurrency(latestNetWorth)}</strong>
+            </p>
+            <p>
+              Latest Bitcoin: <strong>{asBitcoin(latestBitcoin)} BTC</strong>
+              {" | "}
+              Top Percent: <strong>{asPercent(latestTopPercent)}</strong>
+            </p>
+          </div>
         </div>
         <button onClick={handleLogout}>Logout</button>
       </header>
@@ -434,8 +1048,8 @@ function App() {
               <div key={key} className="source-group">
                 <div className="row source-group-header">
                   <label>{label}</label>
-                  <button type="button" className="secondary" onClick={() => addSourceInput(key)}>
-                    + Add Source
+                  <button type="button" className="secondary add-source-btn" onClick={() => addSourceInput(key)}>
+                    +
                   </button>
                 </div>
                 <div className="source-list">
@@ -469,20 +1083,29 @@ function App() {
                 type="datetime-local"
                 value={investmentForm.recorded_at}
                 onChange={(event) =>
-                  setInvestmentForm((prev) => ({ ...prev, recorded_at: event.target.value }))
+                  (setIsInvestmentFormPinnedBlank(true),
+                  setInvestmentForm((prev) => ({ ...prev, recorded_at: event.target.value })))
                 }
               />
             </label>
 
             <div className="row">
               <button type="submit">{editingInvestmentId ? "Update" : "Save"} Investment</button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={setInvestmentFormBlank}
+              >
+                Set Blank
+              </button>
               {editingInvestmentId && (
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => {
                     setEditingInvestmentId("");
-                    setInvestmentForm(defaultInvestmentForm);
+                    setIsInvestmentFormPinnedBlank(false);
+                    setInvestmentForm(createInvestmentFormFromEntry(latestInvestmentEntry));
                   }}
                 >
                   Cancel Edit
@@ -493,15 +1116,138 @@ function App() {
           </section>
         )}
 
-        {activePage === "net-worth-trend" && (
+        {activePage === "bitcoin-holdings" && (
           <section className="card page-card">
+            <h2>Bitcoin Holdings</h2>
+            <p className="hint">Add all bitcoin sources. Up to 8 decimals are supported.</p>
+
+            <form onSubmit={handleBitcoinSubmit} className="form-grid">
+              <div className="source-group">
+                <div className="row source-group-header">
+                  <label>Bitcoin Sources (BTC)</label>
+                  <button type="button" className="secondary add-source-btn" onClick={addBitcoinSourceInput}>
+                    +
+                  </button>
+                </div>
+                <div className="source-list">
+                  {bitcoinForm.sources.map((entry, index) => (
+                    <div key={`bitcoin-source-${index}`} className="row source-row">
+                      <input
+                        type="number"
+                        step="0.00000001"
+                        min="0"
+                        value={entry}
+                        onChange={(event) => updateBitcoinSourceValue(index, event.target.value)}
+                        required
+                      />
+                      {bitcoinForm.sources.length > 1 && (
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => removeBitcoinSourceInput(index)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <label>
+                Recorded At (optional)
+                <input
+                  type="datetime-local"
+                  value={bitcoinForm.recorded_at}
+                  onChange={(event) =>
+                    (setIsBitcoinFormPinnedBlank(true),
+                    setBitcoinForm((prev) => ({ ...prev, recorded_at: event.target.value })))
+                  }
+                />
+              </label>
+
+              <div className="row">
+                <button type="submit">Save Bitcoin Holding</button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setIsBitcoinFormPinnedBlank(false);
+                    setBitcoinForm(createBitcoinFormFromEntry(latestBitcoinHoldingEntry));
+                  }}
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={setBitcoinFormBlank}
+                >
+                  Set Blank
+                </button>
+              </div>
+            </form>
+
+            <section className="bitcoin-graphs">
+              <h3>Bitcoin Over Time</h3>
+              <SimpleBitcoinHistoryChart data={bitcoinHistory} />
+
+              <div className="bitcoin-percent-header row">
+                <h3>Top Percent by Bitcoin Holdings</h3>
+                <label className="world-population-input">
+                  World Population
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={worldPopulation}
+                    onChange={(event) => setWorldPopulation(event.target.value)}
+                  />
+                </label>
+              </div>
+              <p className="hint">
+                Formula used: top_percent = (21,000,000 / (W × B)) × 100, where W = world population and B = bitcoin held.
+              </p>
+              <SimpleTopPercentChart
+                data={bitcoinTopPercentHistory}
+                worldPopulation={worldPopulationValue}
+              />
+
+              {bitcoinHoldings.length > 0 && (
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Recorded At (IST)</th>
+                        <th>Bitcoin (BTC)</th>
+                        <th>Sources</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bitcoinHoldings.map((holding) => (
+                        <tr key={holding._id}>
+                          <td>{formatISTDateTime(holding.recorded_at_ist || holding.recorded_at)}</td>
+                          <td>{asBitcoin(holding.bitcoin)}</td>
+                          <td>{(holding.sources || []).join(" + ")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </section>
+        )}
+
+        {activePage === "net-worth-trend" && (
+          <section className="card page-card viewport-fit-card">
             <h2>Net Worth Trend</h2>
             <SimpleNetWorthChart data={history} />
           </section>
         )}
 
         {activePage === "asset-allocation" && (
-          <section className="card page-card">
+          <section className="card page-card viewport-fit-card">
             <h2>Latest Asset Allocation (Stocks + Gold + Bitcoin)</h2>
             {investmentsByRecordedDate.length > 0 && (
               <div className="asset-timeline-control">
@@ -603,6 +1349,93 @@ function App() {
           </section>
         )}
 
+        {activePage === "combined-stats" && (
+          <section className="card page-card">
+            <h2>Combined Statistics (All Users)</h2>
+            <p className="hint">
+              This view shows latest combined values by taking the latest record of each user and summing across all users.
+            </p>
+
+            <section className="combined-summary-grid">
+              <article className="combined-summary-card">
+                <h3>Combined Net Worth</h3>
+                <p className="combined-summary-value">{asCurrency(combinedLatestNetWorth)}</p>
+              </article>
+              <article className="combined-summary-card">
+                <h3>Combined Bitcoin</h3>
+                <p className="combined-summary-value">{asBitcoin(combinedLatestBitcoin)} BTC</p>
+              </article>
+              <article className="combined-summary-card">
+                <h3>Combined Top Percent</h3>
+                <p className="combined-summary-value">{asPercent(combinedLatestTopPercent)}</p>
+              </article>
+              <article className="combined-summary-card">
+                <h3>Users Included</h3>
+                <p className="combined-summary-value">{combinedSummary?.investment?.users_count || 0}</p>
+              </article>
+            </section>
+
+            <section className="bitcoin-graphs">
+              <h3>Combined Net Worth Trend</h3>
+              <SimpleNetWorthChart data={combinedNetWorthHistory} />
+
+              <h3>Combined Bitcoin Over Time</h3>
+              <SimpleBitcoinHistoryChart data={combinedBitcoinHistory} />
+
+              <div className="bitcoin-percent-header row">
+                <h3>Combined Top Percent by Bitcoin Holdings</h3>
+                <label className="world-population-input">
+                  World Population
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={worldPopulation}
+                    onChange={(event) => setWorldPopulation(event.target.value)}
+                  />
+                </label>
+              </div>
+              <SimpleTopPercentChart
+                data={combinedBitcoinTopPercentHistory}
+                worldPopulation={worldPopulationValue}
+              />
+
+              <section className="asset-pie-section">
+                <h3>Combined Asset Allocation Timeline (Stocks + Gold + Bitcoin)</h3>
+                {combinedTimelineByRecordedDate.length > 0 && (
+                  <div className="asset-timeline-control">
+                    <label htmlFor="combinedAssetTimelineSlider">
+                      Record: <strong>{combinedAssetTimelineIndex + 1}</strong> / {combinedTimelineByRecordedDate.length}
+                    </label>
+                    <input
+                      id="combinedAssetTimelineSlider"
+                      type="range"
+                      min="0"
+                      max={Math.max(combinedTimelineByRecordedDate.length - 1, 0)}
+                      step="1"
+                      value={Math.min(
+                        combinedAssetTimelineIndex,
+                        Math.max(combinedTimelineByRecordedDate.length - 1, 0)
+                      )}
+                      onChange={(event) => setCombinedAssetTimelineIndex(Number(event.target.value))}
+                    />
+                    <p className="hint">
+                      Showing combined record date: {selectedCombinedEntry?.recorded_at
+                        ? formatISTDateTime(selectedCombinedEntry.recorded_at)
+                        : "N/A"}
+                    </p>
+                  </div>
+                )}
+                <SimpleAssetPieChart
+                  total={combinedAssetPieData.total}
+                  slices={combinedAssetPieData.slices}
+                  recordedAt={selectedCombinedEntry?.recorded_at}
+                />
+              </section>
+            </section>
+          </section>
+        )}
+
         {isAdmin && activePage === "manage-users" && (
           <section className="card page-card">
             <h2>Admin - Manage Users</h2>
@@ -619,14 +1452,25 @@ function App() {
               </label>
               <label>
                 Password
-                <input
-                  type="password"
-                  value={newUserForm.password}
-                  onChange={(event) =>
-                    setNewUserForm((prev) => ({ ...prev, password: event.target.value }))
-                  }
-                  required
-                />
+                <div className="password-input-wrap">
+                  <input
+                    type={showNewUserPassword ? "text" : "password"}
+                    value={newUserForm.password}
+                    onChange={(event) =>
+                      setNewUserForm((prev) => ({ ...prev, password: event.target.value }))
+                    }
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="secondary password-toggle-btn"
+                    aria-label={showNewUserPassword ? "Hide password" : "Show password"}
+                    title={showNewUserPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowNewUserPassword((prev) => !prev)}
+                  >
+                    {showNewUserPassword ? "🙈" : "👁"}
+                  </button>
+                </div>
               </label>
               <label>
                 Role
@@ -694,27 +1538,45 @@ function SimpleNetWorthChart({ data }) {
     return <p className="hint">No net worth history yet. Add your first investment entry.</p>;
   }
 
+  const pointsData = data
+    .map((item) => ({
+      ...item,
+      timestamp: getTimestamp(item.recorded_at),
+    }))
+    .filter((item) => item.timestamp !== null);
+
+  if (!pointsData.length) {
+    return <p className="hint">No valid timestamps available for net worth chart.</p>;
+  }
+
   const width = 560;
   const height = 260;
   const padding = { top: 20, right: 34, bottom: 48, left: 78 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
-  const values = data.map((item) => Number(item.net_worth));
+  const values = pointsData.map((item) => Number(item.net_worth));
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const range = maxValue - minValue || 1;
+  const minTimestamp = Math.min(...pointsData.map((item) => item.timestamp));
+  const maxTimestamp = Math.max(...pointsData.map((item) => item.timestamp));
+  const timeRange = maxTimestamp - minTimestamp;
 
-  const points = data
-    .map((item, index) => {
-      const x = padding.left + (index * plotWidth) / Math.max(data.length - 1, 1);
+  const getX = (timestamp) => {
+    if (!timeRange) return padding.left + plotWidth / 2;
+    return padding.left + ((timestamp - minTimestamp) / timeRange) * plotWidth;
+  };
+
+  const points = pointsData
+    .map((item) => {
+      const x = getX(item.timestamp);
       const y = padding.top + (1 - (item.net_worth - minValue) / range) * plotHeight;
       return `${x},${y}`;
     })
     .join(" ");
 
-  const formatAxisValue = (value) =>
-    `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 1 }).format(rupeesToLakh(value))} L`;
+  const formatAxisValue = (value) => asCurrency(value);
 
   const yTicks = Array.from({ length: 3 }, (_, index) => {
     const ratio = index / 2;
@@ -723,17 +1585,11 @@ function SimpleNetWorthChart({ data }) {
     return { y, value };
   });
 
-  const maxXLabels = Math.max(2, Math.floor(plotWidth / 90));
-  const xLabelCount = Math.min(data.length, maxXLabels);
-  const xLabelIndices = Array.from({ length: xLabelCount }, (_, idx) =>
-    Math.round((idx * (data.length - 1)) / Math.max(xLabelCount - 1, 1))
-  ).filter((value, index, arr) => arr.indexOf(value) === index);
-
-  const compactDateFormat = data.length > 20;
-  const xLabels = xLabelIndices.map((index) => ({
-    x: padding.left + (index * plotWidth) / Math.max(data.length - 1, 1),
-    label: new Date(data[index].recorded_at).toLocaleDateString("en-IN", {
-      timeZone: IST_TIME_ZONE,
+  const timeTicks = buildTimeTicks(minTimestamp, maxTimestamp, plotWidth, padding.left);
+  const compactDateFormat = pointsData.length > 20;
+  const xLabels = timeTicks.map((tick, index) => ({
+    x: tick.x,
+    label: formatISTDate(new Date(tick.timestamp), {
       day: compactDateFormat ? undefined : "2-digit",
       month: "short",
       year: compactDateFormat ? "2-digit" : "numeric",
@@ -741,16 +1597,28 @@ function SimpleNetWorthChart({ data }) {
     index,
   }));
 
-  const pointRenderStep = Math.max(1, Math.ceil(data.length / 80));
+  const pointRenderStep = Math.max(1, Math.ceil(pointsData.length / 80));
   const visiblePointIndices = new Set(
-    data
+    pointsData
       .map((_, idx) => idx)
-      .filter((idx) => idx % pointRenderStep === 0 || idx === data.length - 1)
+      .filter((idx) => idx % pointRenderStep === 0 || idx === pointsData.length - 1)
   );
 
   return (
     <div>
       <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="chart">
+        {timeTicks.map((tick, index) => (
+          <line
+            key={`x-grid-${index}`}
+            x1={tick.x}
+            y1={padding.top}
+            x2={tick.x}
+            y2={height - padding.bottom}
+            stroke="#e2e8f0"
+            strokeDasharray="4 4"
+          />
+        ))}
+
         {yTicks.map((tick, index) => (
           <g key={`y-tick-${index}`}>
             <line
@@ -782,17 +1650,24 @@ function SimpleNetWorthChart({ data }) {
           stroke="#94a3b8"
         />
 
-        <polyline points={points} fill="none" stroke="#0ea5e9" strokeWidth="3" />
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#0ea5e9"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
 
-        {data.map((item, index) => {
+        {pointsData.map((item, index) => {
           if (!visiblePointIndices.has(index)) return null;
 
-          const x = padding.left + (index * plotWidth) / Math.max(data.length - 1, 1);
+          const x = getX(item.timestamp);
           const y = padding.top + (1 - (item.net_worth - minValue) / range) * plotHeight;
 
           return (
             <g key={`point-${item.recorded_at}-${index}`}>
-              <circle cx={x} cy={y} r="3.5" fill="#0ea5e9" />
+              <circle cx={x} cy={y} r="3.25" fill="#0ea5e9" stroke="#ffffff" strokeWidth="1.5" />
               <title>
                 {formatISTDateTime(item.recorded_at)} — {asCurrency(item.net_worth)}
               </title>
@@ -822,7 +1697,7 @@ function SimpleNetWorthChart({ data }) {
           fill="#334155"
           fontWeight="600"
         >
-          Net Worth (₹ Lakh)
+          Net Worth (₹)
         </text>
         <text
           x={width / 2}
@@ -953,6 +1828,353 @@ function SimpleAssetPieChart({ total, slices, recordedAt }) {
         </div>
       </div>
     </section>
+  );
+}
+
+function SimpleBitcoinHistoryChart({ data }) {
+  if (!data.length) {
+    return <p className="hint">No bitcoin history yet. Add your first bitcoin entry.</p>;
+  }
+
+  const pointsData = data
+    .map((item) => ({
+      ...item,
+      timestamp: getTimestamp(item.recorded_at),
+    }))
+    .filter((item) => item.timestamp !== null);
+
+  if (!pointsData.length) {
+    return <p className="hint">No valid timestamps available for bitcoin chart.</p>;
+  }
+
+  const width = 560;
+  const height = 260;
+  const padding = { top: 20, right: 34, bottom: 50, left: 96 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+
+  const values = pointsData.map((item) => Number(item.bitcoin || 0));
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const axisMin = minValue;
+  const axisMax = maxValue;
+  const range = axisMax - axisMin || 1;
+  const minTimestamp = Math.min(...pointsData.map((item) => item.timestamp));
+  const maxTimestamp = Math.max(...pointsData.map((item) => item.timestamp));
+  const timeRange = maxTimestamp - minTimestamp;
+
+  const getX = (timestamp) => {
+    if (!timeRange) return padding.left + plotWidth / 2;
+    return padding.left + ((timestamp - minTimestamp) / timeRange) * plotWidth;
+  };
+
+  const points = pointsData
+    .map((item) => {
+      const x = getX(item.timestamp);
+      const y = padding.top + (1 - (Number(item.bitcoin || 0) - axisMin) / range) * plotHeight;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const yTicks = Array.from({ length: 3 }, (_, index) => {
+    const ratio = index / 2;
+    const value = axisMax - ratio * range;
+    const y = padding.top + ratio * plotHeight;
+    return { y, value };
+  });
+
+  const timeTicks = buildTimeTicks(minTimestamp, maxTimestamp, plotWidth, padding.left);
+  const xLabels = timeTicks.map((tick) => ({
+    x: tick.x,
+    label: formatISTDate(new Date(tick.timestamp)),
+  }));
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="chart">
+        {timeTicks.map((tick, index) => (
+          <line
+            key={`btc-x-grid-${index}`}
+            x1={tick.x}
+            y1={padding.top}
+            x2={tick.x}
+            y2={height - padding.bottom}
+            stroke="#e2e8f0"
+            strokeDasharray="4 4"
+          />
+        ))}
+
+        {yTicks.map((tick, index) => (
+          <g key={`btc-y-tick-${index}`}>
+            <line
+              x1={padding.left}
+              y1={tick.y}
+              x2={width - padding.right}
+              y2={tick.y}
+              stroke="#e2e8f0"
+              strokeDasharray="4 4"
+            />
+            <text x={padding.left - 10} y={tick.y + 4} textAnchor="end" fontSize="10" fill="#475569">
+              {asBitcoin(tick.value)}
+            </text>
+          </g>
+        ))}
+
+        <line
+          x1={padding.left}
+          y1={padding.top}
+          x2={padding.left}
+          y2={height - padding.bottom}
+          stroke="#94a3b8"
+        />
+        <line
+          x1={padding.left}
+          y1={height - padding.bottom}
+          x2={width - padding.right}
+          y2={height - padding.bottom}
+          stroke="#94a3b8"
+        />
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#f97316"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {pointsData.map((item, index) => {
+          const x = getX(item.timestamp);
+          const y = padding.top + (1 - (Number(item.bitcoin || 0) - axisMin) / range) * plotHeight;
+
+          return (
+            <g key={`btc-point-${item.recorded_at}-${index}`}>
+              <circle cx={x} cy={y} r="3.25" fill="#f97316" stroke="#ffffff" strokeWidth="1.5" />
+              <title>
+                {formatISTDateTime(item.recorded_at)} — {asBitcoin(item.bitcoin)} BTC
+              </title>
+            </g>
+          );
+        })}
+
+        {xLabels.map((tick, index) => (
+          <text
+            key={`btc-x-label-${index}`}
+            x={tick.x}
+            y={height - padding.bottom + 16}
+            textAnchor={index === 0 ? "start" : index === xLabels.length - 1 ? "end" : "middle"}
+            fontSize="10"
+            fill="#475569"
+          >
+            {tick.label}
+          </text>
+        ))}
+
+        <text
+          x={-height / 2}
+          y={8}
+          transform="rotate(-90)"
+          textAnchor="middle"
+          fontSize="11"
+          fill="#334155"
+          fontWeight="600"
+        >
+          Bitcoin (BTC)
+        </text>
+        <text
+          x={width / 2}
+          y={height - 4}
+          textAnchor="middle"
+          fontSize="11"
+          fill="#334155"
+          fontWeight="600"
+        >
+          Recorded date
+        </text>
+      </svg>
+      <p className="hint">
+        Min: {asBitcoin(minValue)} BTC | Max: {asBitcoin(maxValue)} BTC
+      </p>
+    </div>
+  );
+}
+
+function SimpleTopPercentChart({ data, worldPopulation }) {
+  if (!worldPopulation || worldPopulation <= 0) {
+    return <p className="hint">Enter a valid world population to view top-percent chart.</p>;
+  }
+
+  if (!data.length) {
+    return <p className="hint">No top-percent history yet. Add bitcoin entries to build the chart.</p>;
+  }
+
+  const filtered = data.filter((item) => item.top_percent !== null && item.top_percent !== undefined);
+  if (!filtered.length) {
+    return <p className="hint">Top-percent cannot be calculated for zero bitcoin values.</p>;
+  }
+
+  const pointsData = filtered
+    .map((item) => ({
+      ...item,
+      timestamp: getTimestamp(item.recorded_at),
+    }))
+    .filter((item) => item.timestamp !== null);
+
+  if (!pointsData.length) {
+    return <p className="hint">No valid timestamps available for top-percent chart.</p>;
+  }
+
+  const width = 560;
+  const height = 260;
+  const padding = { top: 20, right: 34, bottom: 50, left: 96 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+
+  const values = pointsData.map((item) => Number(item.top_percent || 0));
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const axisMin = minValue;
+  const axisMax = maxValue;
+  const range = axisMax - axisMin || 1;
+  const minTimestamp = Math.min(...pointsData.map((item) => item.timestamp));
+  const maxTimestamp = Math.max(...pointsData.map((item) => item.timestamp));
+  const timeRange = maxTimestamp - minTimestamp;
+
+  const getX = (timestamp) => {
+    if (!timeRange) return padding.left + plotWidth / 2;
+    return padding.left + ((timestamp - minTimestamp) / timeRange) * plotWidth;
+  };
+
+  const points = pointsData
+    .map((item) => {
+      const x = getX(item.timestamp);
+      const y = padding.top + (1 - (Number(item.top_percent || 0) - axisMin) / range) * plotHeight;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const yTicks = Array.from({ length: 3 }, (_, index) => {
+    const ratio = index / 2;
+    const value = axisMax - ratio * range;
+    const y = padding.top + ratio * plotHeight;
+    return { y, value };
+  });
+
+  const timeTicks = buildTimeTicks(minTimestamp, maxTimestamp, plotWidth, padding.left);
+  const xLabels = timeTicks.map((tick) => ({
+    x: tick.x,
+    label: formatISTDate(new Date(tick.timestamp)),
+  }));
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="chart">
+        {timeTicks.map((tick, index) => (
+          <line
+            key={`pct-x-grid-${index}`}
+            x1={tick.x}
+            y1={padding.top}
+            x2={tick.x}
+            y2={height - padding.bottom}
+            stroke="#e2e8f0"
+            strokeDasharray="4 4"
+          />
+        ))}
+
+        {yTicks.map((tick, index) => (
+          <g key={`pct-y-tick-${index}`}>
+            <line
+              x1={padding.left}
+              y1={tick.y}
+              x2={width - padding.right}
+              y2={tick.y}
+              stroke="#e2e8f0"
+              strokeDasharray="4 4"
+            />
+            <text x={padding.left - 10} y={tick.y + 4} textAnchor="end" fontSize="10" fill="#475569">
+              {asPercent(tick.value)}
+            </text>
+          </g>
+        ))}
+
+        <line
+          x1={padding.left}
+          y1={padding.top}
+          x2={padding.left}
+          y2={height - padding.bottom}
+          stroke="#94a3b8"
+        />
+        <line
+          x1={padding.left}
+          y1={height - padding.bottom}
+          x2={width - padding.right}
+          y2={height - padding.bottom}
+          stroke="#94a3b8"
+        />
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {pointsData.map((item, index) => {
+          const x = getX(item.timestamp);
+          const y = padding.top + (1 - (Number(item.top_percent || 0) - axisMin) / range) * plotHeight;
+
+          return (
+            <g key={`pct-point-${item.recorded_at}-${index}`}>
+              <circle cx={x} cy={y} r="3.25" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+              <title>
+                {formatISTDateTime(item.recorded_at)} — {asPercent(item.top_percent)}
+              </title>
+            </g>
+          );
+        })}
+
+        {xLabels.map((tick, index) => (
+          <text
+            key={`pct-x-label-${index}`}
+            x={tick.x}
+            y={height - padding.bottom + 16}
+            textAnchor={index === 0 ? "start" : index === xLabels.length - 1 ? "end" : "middle"}
+            fontSize="10"
+            fill="#475569"
+          >
+            {tick.label}
+          </text>
+        ))}
+
+        <text
+          x={-height / 2}
+          y={8}
+          transform="rotate(-90)"
+          textAnchor="middle"
+          fontSize="11"
+          fill="#334155"
+          fontWeight="600"
+        >
+          Top Percent
+        </text>
+        <text
+          x={width / 2}
+          y={height - 4}
+          textAnchor="middle"
+          fontSize="11"
+          fill="#334155"
+          fontWeight="600"
+        >
+          Recorded date
+        </text>
+      </svg>
+      <p className="hint">
+        Current estimate: <strong>{asPercent(filtered[filtered.length - 1].top_percent)}</strong> at world population {new Intl.NumberFormat("en-IN").format(worldPopulation)}
+      </p>
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any
 
 from bson import ObjectId
 from flask import Blueprint, g, request
@@ -9,6 +10,15 @@ from app.utils.serializers import serialize_document
 from app.utils.validators import compute_net_worth, parse_investment_payload
 
 investment_bp = Blueprint("investments", __name__)
+
+
+def _as_float(value: Any) -> float:
+    try:
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @investment_bp.post("")
@@ -83,6 +93,205 @@ def net_worth_history():
         for item in cursor
     ]
     return {"message": "Net worth history fetched", "history": history}, 200
+
+
+@investment_bp.get("/combined-summary")
+@login_required
+def combined_summary():
+    print("[INVESTMENT] Building combined summary for all users")
+    db = get_db()
+
+    aggregated = list(
+        db.investments.aggregate(
+            [
+                {"$sort": {"user_id": 1, "recorded_at": -1, "_id": -1}},
+                {
+                    "$group": {
+                        "_id": "$user_id",
+                        "stocks": {"$first": "$stocks"},
+                        "gold": {"$first": "$gold"},
+                        "bitcoin": {"$first": "$bitcoin"},
+                        "cash": {"$first": "$cash"},
+                        "credit_card_dues": {"$first": "$credit_card_dues"},
+                        "total_loan_taken": {"$first": "$total_loan_taken"},
+                        "loan_repaid": {"$first": "$loan_repaid"},
+                        "net_worth": {"$first": "$net_worth"},
+                        "recorded_at": {"$first": "$recorded_at"},
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "stocks": {"$sum": "$stocks"},
+                        "gold": {"$sum": "$gold"},
+                        "bitcoin": {"$sum": "$bitcoin"},
+                        "cash": {"$sum": "$cash"},
+                        "credit_card_dues": {"$sum": "$credit_card_dues"},
+                        "total_loan_taken": {"$sum": "$total_loan_taken"},
+                        "loan_repaid": {"$sum": "$loan_repaid"},
+                        "net_worth": {"$sum": "$net_worth"},
+                        "users_count": {"$sum": 1},
+                        "latest_recorded_at": {"$max": "$recorded_at"},
+                    }
+                },
+            ]
+        )
+    )
+
+    summary = aggregated[0] if aggregated else {}
+    return {
+        "message": "Combined investment summary fetched",
+        "summary": {
+            "stocks": summary.get("stocks", 0),
+            "gold": summary.get("gold", 0),
+            "bitcoin": summary.get("bitcoin", 0),
+            "cash": summary.get("cash", 0),
+            "credit_card_dues": summary.get("credit_card_dues", 0),
+            "total_loan_taken": summary.get("total_loan_taken", 0),
+            "loan_repaid": summary.get("loan_repaid", 0),
+            "net_worth": summary.get("net_worth", 0),
+            "users_count": summary.get("users_count", 0),
+            "latest_recorded_at": (
+                summary.get("latest_recorded_at").isoformat()
+                if summary.get("latest_recorded_at")
+                else None
+            ),
+        },
+    }, 200
+
+
+@investment_bp.get("/combined-net-worth-history")
+@login_required
+def combined_net_worth_history():
+    print("[INVESTMENT] Building combined net worth history for all users")
+    db = get_db()
+
+    earliest_by_user_cursor = db.investments.aggregate(
+        [
+            {"$sort": {"user_id": 1, "recorded_at": 1, "_id": 1}},
+            {
+                "$group": {
+                    "_id": "$user_id",
+                    "net_worth": {"$first": "$net_worth"},
+                }
+            },
+        ]
+    )
+
+    user_latest = {
+        str(item["_id"]): _as_float(item.get("net_worth", 0))
+        for item in earliest_by_user_cursor
+        if item.get("_id")
+    }
+
+    if not user_latest:
+        return {"message": "Combined net worth history fetched", "history": []}, 200
+
+    cursor = db.investments.find(
+        {},
+        {"user_id": 1, "recorded_at": 1, "net_worth": 1},
+    ).sort([("recorded_at", 1), ("_id", 1)])
+
+    running_total = sum(user_latest.values())
+    history: list[dict[str, Any]] = []
+
+    for item in cursor:
+        recorded_at = item.get("recorded_at")
+        user_id = str(item.get("user_id"))
+        if not recorded_at or not user_id:
+            continue
+
+        previous_value = user_latest.get(user_id, 0.0)
+        current_value = _as_float(item.get("net_worth", 0))
+        running_total += current_value - previous_value
+        user_latest[user_id] = current_value
+
+        entry = {
+            "recorded_at": recorded_at.isoformat(),
+            "net_worth": running_total,
+            "users_count": len(user_latest),
+        }
+
+        if history and history[-1]["recorded_at"] == entry["recorded_at"]:
+            history[-1] = entry
+        else:
+            history.append(entry)
+
+    return {"message": "Combined net worth history fetched", "history": history}, 200
+
+
+@investment_bp.get("/combined-asset-timeline")
+@login_required
+def combined_asset_timeline():
+    print("[INVESTMENT] Building combined asset timeline for all users")
+    db = get_db()
+
+    fields = [
+        "stocks",
+        "gold",
+        "bitcoin",
+        "cash",
+        "credit_card_dues",
+        "total_loan_taken",
+        "loan_repaid",
+        "net_worth",
+    ]
+
+    earliest_pipeline = [
+        {"$sort": {"user_id": 1, "recorded_at": 1, "_id": 1}},
+        {
+            "$group": {
+                "_id": "$user_id",
+                **{field: {"$first": f"${field}"} for field in fields},
+            }
+        },
+    ]
+
+    user_latest = {
+        str(item["_id"]): {field: _as_float(item.get(field, 0)) for field in fields}
+        for item in db.investments.aggregate(earliest_pipeline)
+        if item.get("_id")
+    }
+
+    if not user_latest:
+        return {"message": "Combined asset timeline fetched", "timeline": []}, 200
+
+    totals = {
+        field: sum(user_values[field] for user_values in user_latest.values())
+        for field in fields
+    }
+
+    projection = {"user_id": 1, "recorded_at": 1, **{field: 1 for field in fields}}
+    cursor = db.investments.find({}, projection).sort([("recorded_at", 1), ("_id", 1)])
+
+    timeline: list[dict[str, Any]] = []
+
+    for item in cursor:
+        recorded_at = item.get("recorded_at")
+        user_id = str(item.get("user_id"))
+        if not recorded_at or not user_id:
+            continue
+
+        previous_values = user_latest.get(user_id, {field: 0.0 for field in fields})
+        current_values = {field: _as_float(item.get(field, 0)) for field in fields}
+
+        for field in fields:
+            totals[field] += current_values[field] - previous_values.get(field, 0.0)
+
+        user_latest[user_id] = current_values
+
+        entry = {
+            "recorded_at": recorded_at.isoformat(),
+            **totals,
+            "users_count": len(user_latest),
+        }
+
+        if timeline and timeline[-1]["recorded_at"] == entry["recorded_at"]:
+            timeline[-1] = entry
+        else:
+            timeline.append(entry)
+
+    return {"message": "Combined asset timeline fetched", "timeline": timeline}, 200
 
 
 @investment_bp.put("/<investment_id>")

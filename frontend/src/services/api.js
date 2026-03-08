@@ -1,8 +1,9 @@
 import { API_BASE_URL } from "../config";
 
 async function request(path, options = {}, token = null) {
+  const isFormDataBody = options.body instanceof FormData;
   const headers = {
-    "Content-Type": "application/json",
+    ...(isFormDataBody ? {} : { "Content-Type": "application/json" }),
     ...(options.headers || {}),
   };
 
@@ -47,6 +48,19 @@ export const api = {
 
   getMe: (token) => request("/auth/me", {}, token),
   logout: (token) => request("/auth/logout", { method: "POST" }, token),
+  uploadProfilePicture: (token, file) => {
+    const formData = new FormData();
+    formData.append("profile_picture", file);
+
+    return request(
+      "/auth/profile-picture",
+      {
+        method: "POST",
+        body: formData,
+      },
+      token
+    );
+  },
 
   listUsers: (token) => request("/admin/users", {}, token),
   createUser: (token, payload) =>
@@ -104,4 +118,40 @@ export const api = {
       token
     ),
   getNetWorthHistory: (token) => request("/investments/net-worth-history", {}, token),
+  getCombinedInvestmentSummary: (token) => request("/investments/combined-summary", {}, token),
+  getCombinedNetWorthHistory: (token) =>
+    request("/investments/combined-net-worth-history", {}, token),
+  getCombinedAssetTimeline: (token) =>
+    request("/investments/combined-asset-timeline", {}, token),
+
+  listBitcoinHoldings: (token) => request("/bitcoin-holdings", {}, token),
+  createBitcoinHolding: (token, payload) =>
+    request(
+      "/bitcoin-holdings",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      token
+    ),
+  getBitcoinHistory: (token) => request("/bitcoin-holdings/history", {}, token),
+  getBitcoinTopPercentHistory: (token, worldPopulation) => {
+    const query =
+      worldPopulation === undefined || worldPopulation === null
+        ? ""
+        : `?world_population=${encodeURIComponent(worldPopulation)}`;
+    return request(`/bitcoin-holdings/top-percent-history${query}`, {}, token);
+  },
+  getCombinedBitcoinSummary: (token) =>
+    request("/bitcoin-holdings/combined-summary", {}, token),
+  getCombinedBitcoinHistory: (token) =>
+    request("/bitcoin-holdings/combined-history", {}, token),
+  getCombinedBitcoinTopPercentHistory: (token, worldPopulation) => {
+    const query =
+      worldPopulation === undefined || worldPopulation === null
+        ? ""
+        : `?world_population=${encodeURIComponent(worldPopulation)}`;
+    return request(`/bitcoin-holdings/combined-top-percent-history${query}`, {}, token);
+  },
+
 };
