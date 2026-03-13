@@ -25,6 +25,7 @@ const IST_TIME_ZONE = "Asia/Kolkata";
 const DEFAULT_WORLD_POPULATION = 8200000000;
 const TOAST_DURATION_MS = 3000;
 const TOAST_EXIT_DURATION_MS = 350;
+const MIN_PROFILE_CROP_SIZE_PERCENT = 15;
 const DEFAULT_PROFILE_PICTURE =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='60' fill='%23e2e8f0'/%3E%3Ccircle cx='60' cy='44' r='22' fill='%2394a3b8'/%3E%3Cpath d='M24 100c6-19 22-30 36-30s30 11 36 30' fill='%2394a3b8'/%3E%3C/svg%3E";
 const INVESTMENT_FORM_DRAFT_STORAGE_KEY = (userId) => `investment_tracker_investment_form_draft_${userId}`;
@@ -149,6 +150,8 @@ const toISTDateTimeLocalValue = (value) => {
   return `${getPart("year")}-${getPart("month")}-${getPart("day")}T${getPart("hour")}:${getPart("minute")}`;
 };
 
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
 function App() {
   const getCurrentISTDateTimeLocalValue = () => toISTDateTimeLocalValue(new Date());
 
@@ -181,10 +184,21 @@ function App() {
   const [isUploadingProfilePicture, setIsUploadingProfilePicture] = useState(false);
   const [isProfilePictureMenuOpen, setIsProfilePictureMenuOpen] = useState(false);
   const [isProfilePicturePreviewOpen, setIsProfilePicturePreviewOpen] = useState(false);
+  const [isProfilePictureCropOpen, setIsProfilePictureCropOpen] = useState(false);
+  const [profilePictureCropSrc, setProfilePictureCropSrc] = useState("");
+  const [selectedProfilePictureFile, setSelectedProfilePictureFile] = useState(null);
+  const [profileCropRect, setProfileCropRect] = useState({
+    x: 15,
+    y: 15,
+    width: 70,
+    height: 70,
+  });
+  const [profileCropDragState, setProfileCropDragState] = useState(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNavMenuOpen, setIsNavMenuOpen] = useState(false);
   const [activePage, setActivePage] = useState("add-investment");
   const [localTimeNow, setLocalTimeNow] = useState(() => new Date());
+  const cropImageRef = useRef(null);
 
   const [loginForm, setLoginForm] = useState({
     username: "",
@@ -637,6 +651,95 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (profilePictureCropSrc) {
+        URL.revokeObjectURL(profilePictureCropSrc);
+      }
+    };
+  }, [profilePictureCropSrc]);
+
+  useEffect(() => {
+    if (!profileCropDragState) return;
+
+    const handlePointerMove = (event) => {
+      const { bounds, corner, initialRect } = profileCropDragState;
+      const pointerX = ((event.clientX - bounds.left) / bounds.width) * 100;
+      const pointerY = ((event.clientY - bounds.top) / bounds.height) * 100;
+
+      const clampedX = clamp(pointerX, 0, 100);
+      const clampedY = clamp(pointerY, 0, 100);
+
+      let nextRect = initialRect;
+
+      if (corner === "nw") {
+        const right = initialRect.x + initialRect.width;
+        const bottom = initialRect.y + initialRect.height;
+        const nextX = clamp(clampedX, 0, right - MIN_PROFILE_CROP_SIZE_PERCENT);
+        const nextY = clamp(clampedY, 0, bottom - MIN_PROFILE_CROP_SIZE_PERCENT);
+        nextRect = {
+          x: nextX,
+          y: nextY,
+          width: right - nextX,
+          height: bottom - nextY,
+        };
+      }
+
+      if (corner === "ne") {
+        const left = initialRect.x;
+        const bottom = initialRect.y + initialRect.height;
+        const nextX = clamp(clampedX, left + MIN_PROFILE_CROP_SIZE_PERCENT, 100);
+        const nextY = clamp(clampedY, 0, bottom - MIN_PROFILE_CROP_SIZE_PERCENT);
+        nextRect = {
+          x: left,
+          y: nextY,
+          width: nextX - left,
+          height: bottom - nextY,
+        };
+      }
+
+      if (corner === "sw") {
+        const top = initialRect.y;
+        const right = initialRect.x + initialRect.width;
+        const nextX = clamp(clampedX, 0, right - MIN_PROFILE_CROP_SIZE_PERCENT);
+        const nextY = clamp(clampedY, top + MIN_PROFILE_CROP_SIZE_PERCENT, 100);
+        nextRect = {
+          x: nextX,
+          y: top,
+          width: right - nextX,
+          height: nextY - top,
+        };
+      }
+
+      if (corner === "se") {
+        const left = initialRect.x;
+        const top = initialRect.y;
+        const nextX = clamp(clampedX, left + MIN_PROFILE_CROP_SIZE_PERCENT, 100);
+        const nextY = clamp(clampedY, top + MIN_PROFILE_CROP_SIZE_PERCENT, 100);
+        nextRect = {
+          x: left,
+          y: top,
+          width: nextX - left,
+          height: nextY - top,
+        };
+      }
+
+      setProfileCropRect(nextRect);
+    };
+
+    const handlePointerUp = () => {
+      setProfileCropDragState(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [profileCropDragState]);
+
   const addNotification = (text, type = "info") => {
     if (!text) return;
 
@@ -677,7 +780,10 @@ function App() {
           key={notification.id}
           className={`toast-notification ${notification.type === "error" ? "toast-error" : "toast-success"} ${notification.isLeaving ? "leaving" : ""}`}
         >
-          {notification.text}
+          <span className="toast-icon" aria-hidden="true">
+            {notification.type === "error" ? "❌" : "✅"}
+          </span>
+          <span className="toast-text">{notification.text}</span>
         </div>
       ))}
     </div>
@@ -845,6 +951,7 @@ function App() {
     setCombinedBitcoinTopPercentHistory([]);
     setIsProfilePictureMenuOpen(false);
     setIsProfilePicturePreviewOpen(false);
+    closeProfileCropModal();
     setIsUserMenuOpen(false);
     localStorage.removeItem("token");
   };
@@ -877,7 +984,33 @@ function App() {
 
   const handleViewProfilePicture = () => {
     setIsProfilePictureMenuOpen(false);
+    closeProfileCropModal();
     setIsProfilePicturePreviewOpen(true);
+  };
+
+  const closeProfileCropModal = () => {
+    setIsProfilePictureCropOpen(false);
+    setProfileCropDragState(null);
+    setSelectedProfilePictureFile(null);
+    setProfileCropRect({ x: 15, y: 15, width: 70, height: 70 });
+    setProfilePictureCropSrc((currentSrc) => {
+      if (currentSrc) {
+        URL.revokeObjectURL(currentSrc);
+      }
+      return "";
+    });
+  };
+
+  const startProfileCropHandleDrag = (corner) => (event) => {
+    if (!cropImageRef.current) return;
+    event.preventDefault();
+
+    const bounds = cropImageRef.current.getBoundingClientRect();
+    setProfileCropDragState({
+      corner,
+      bounds,
+      initialRect: profileCropRect,
+    });
   };
 
   const handleEditProfilePicture = () => {
@@ -1092,10 +1225,102 @@ function App() {
 
     try {
       resetAlerts();
+      setIsProfilePictureMenuOpen(false);
+      setIsProfilePicturePreviewOpen(false);
+      setSelectedProfilePictureFile(selectedFile);
+      setProfileCropRect({ x: 15, y: 15, width: 70, height: 70 });
+      setProfilePictureCropSrc((currentSrc) => {
+        if (currentSrc) {
+          URL.revokeObjectURL(currentSrc);
+        }
+        return URL.createObjectURL(selectedFile);
+      });
+      setIsProfilePictureCropOpen(true);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleCropImageLoad = () => {
+    setProfileCropRect({ x: 15, y: 15, width: 70, height: 70 });
+  };
+
+  const handleProfilePictureCropSave = async () => {
+    if (!selectedProfilePictureFile || !cropImageRef.current) {
+      setError("Please select an image again.");
+      return;
+    }
+
+    try {
+      resetAlerts();
       setIsUploadingProfilePicture(true);
-      const response = await api.uploadProfilePicture(token, selectedFile);
+
+      const cropImage = cropImageRef.current;
+      const naturalWidth = cropImage.naturalWidth;
+      const naturalHeight = cropImage.naturalHeight;
+
+      if (!naturalWidth || !naturalHeight) {
+        throw new Error("Unable to read image for cropping.");
+      }
+
+      const cropX = Math.round((profileCropRect.x / 100) * naturalWidth);
+      const cropY = Math.round((profileCropRect.y / 100) * naturalHeight);
+      const cropWidth = Math.max(
+        1,
+        Math.round((profileCropRect.width / 100) * naturalWidth)
+      );
+      const cropHeight = Math.max(
+        1,
+        Math.round((profileCropRect.height / 100) * naturalHeight)
+      );
+
+      const canvas = document.createElement("canvas");
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+
+      const context = canvas.getContext("2d");
+      if (!context) {
+        throw new Error("Unable to prepare cropped image.");
+      }
+
+      context.drawImage(
+        cropImage,
+        cropX,
+        cropY,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight
+      );
+
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(
+          (nextBlob) => {
+            if (!nextBlob) {
+              reject(new Error("Unable to crop image. Please try another image."));
+              return;
+            }
+            resolve(nextBlob);
+          },
+          selectedProfilePictureFile.type || "image/jpeg",
+          0.92
+        );
+      });
+
+      const croppedFile = new File(
+        [blob],
+        `cropped_${selectedProfilePictureFile.name || "profile-picture"}`,
+        {
+          type: blob.type || selectedProfilePictureFile.type || "image/jpeg",
+        }
+      );
+
+      const response = await api.uploadProfilePicture(token, croppedFile);
       setUser(response.user);
       setMessage("Profile picture updated successfully");
+      closeProfileCropModal();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1819,6 +2044,103 @@ function App() {
               alt={`${user.username} profile preview`}
               className="profile-picture-preview-image"
             />
+          </div>
+        </div>
+      )}
+
+      {isProfilePictureCropOpen && (
+        <div
+          className="profile-picture-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Crop profile picture"
+          onClick={isUploadingProfilePicture ? undefined : closeProfileCropModal}
+        >
+          <div className="profile-picture-crop-card" onClick={(event) => event.stopPropagation()}>
+            <div className="profile-picture-modal-header">
+              <h3>Crop Profile Picture</h3>
+              <button
+                type="button"
+                className="profile-picture-modal-close"
+                onClick={closeProfileCropModal}
+                disabled={isUploadingProfilePicture}
+                aria-label="Close crop modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="hint crop-hint-text">
+              Drag the corners to adjust the crop area. The selected area is what gets uploaded.
+            </p>
+
+            <div className="profile-picture-crop-stage">
+              {profilePictureCropSrc && (
+                <img
+                  ref={cropImageRef}
+                  src={profilePictureCropSrc}
+                  alt="Profile crop"
+                  className="profile-picture-crop-source-image"
+                  onLoad={handleCropImageLoad}
+                  draggable={false}
+                />
+              )}
+              <div
+                className="profile-picture-crop-selection"
+                style={{
+                  left: `${profileCropRect.x}%`,
+                  top: `${profileCropRect.y}%`,
+                  width: `${profileCropRect.width}%`,
+                  height: `${profileCropRect.height}%`,
+                }}
+              >
+                <div className="profile-picture-crop-grid" />
+                <button
+                  type="button"
+                  className="profile-corner-handle handle-nw"
+                  onPointerDown={startProfileCropHandleDrag("nw")}
+                  aria-label="Resize crop from top-left"
+                />
+                <button
+                  type="button"
+                  className="profile-corner-handle handle-ne"
+                  onPointerDown={startProfileCropHandleDrag("ne")}
+                  aria-label="Resize crop from top-right"
+                />
+                <button
+                  type="button"
+                  className="profile-corner-handle handle-sw"
+                  onPointerDown={startProfileCropHandleDrag("sw")}
+                  aria-label="Resize crop from bottom-left"
+                />
+                <button
+                  type="button"
+                  className="profile-corner-handle handle-se"
+                  onPointerDown={startProfileCropHandleDrag("se")}
+                  aria-label="Resize crop from bottom-right"
+                />
+              </div>
+            </div>
+
+            <div className="profile-picture-crop-controls">
+              <div className="row">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={closeProfileCropModal}
+                  disabled={isUploadingProfilePicture}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleProfilePictureCropSave}
+                  disabled={isUploadingProfilePicture}
+                >
+                  {isUploadingProfilePicture ? "Uploading..." : "Crop & Save"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
