@@ -23,6 +23,8 @@ const INVESTMENT_SOURCE_FIELDS = [
 
 const IST_TIME_ZONE = "Asia/Kolkata";
 const DEFAULT_WORLD_POPULATION = 8200000000;
+const TOAST_DURATION_MS = 3000;
+const TOAST_EXIT_DURATION_MS = 350;
 const DEFAULT_PROFILE_PICTURE =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='60' fill='%23e2e8f0'/%3E%3Ccircle cx='60' cy='44' r='22' fill='%2394a3b8'/%3E%3Cpath d='M24 100c6-19 22-30 36-30s30 11 36 30' fill='%2394a3b8'/%3E%3C/svg%3E";
 const INVESTMENT_FORM_DRAFT_STORAGE_KEY = (userId) => `investment_tracker_investment_form_draft_${userId}`;
@@ -171,10 +173,18 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(null);
   const profilePictureInputRef = useRef(null);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const profilePictureMenuRef = useRef(null);
+  const userMenuRef = useRef(null);
+  const navMenuRef = useRef(null);
+  const toastTimeoutsRef = useRef(new Map());
+  const [notifications, setNotifications] = useState([]);
   const [isUploadingProfilePicture, setIsUploadingProfilePicture] = useState(false);
+  const [isProfilePictureMenuOpen, setIsProfilePictureMenuOpen] = useState(false);
+  const [isProfilePicturePreviewOpen, setIsProfilePicturePreviewOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isNavMenuOpen, setIsNavMenuOpen] = useState(false);
   const [activePage, setActivePage] = useState("add-investment");
+  const [localTimeNow, setLocalTimeNow] = useState(() => new Date());
 
   const [loginForm, setLoginForm] = useState({
     username: "",
@@ -187,6 +197,7 @@ function App() {
   const [showNewUserPassword, setShowNewUserPassword] = useState(false);
 
   const [investments, setInvestments] = useState([]);
+  const [formsHydratedUserId, setFormsHydratedUserId] = useState("");
   const [investmentForm, setInvestmentForm] = useState(() => {
     const defaultValue = createDefaultInvestmentForm();
     const draft = user ? readDraftFromStorage(INVESTMENT_FORM_DRAFT_STORAGE_KEY(user._id), null) : null;
@@ -259,9 +270,6 @@ function App() {
     ...(isAdmin ? [{ key: "manage-users", label: "Admin - Manage Users" }] : []),
   ];
 
-  const isViewportFitTab =
-    activePage === "net-worth-trend" || activePage === "asset-allocation";
-
   useEffect(() => {
     if (!token) return;
     console.log("[APP] Existing token found, loading profile");
@@ -288,34 +296,121 @@ function App() {
   }, [worldPopulation]);
 
   useEffect(() => {
-    if (user) {
+    if (!user?._id) {
+      setFormsHydratedUserId("");
+      return;
+    }
+
+    const investmentDefault = createDefaultInvestmentForm();
+    const investmentDraft = readDraftFromStorage(
+      INVESTMENT_FORM_DRAFT_STORAGE_KEY(user._id),
+      null
+    );
+
+    let normalizedInvestmentForm = investmentDefault;
+    if (investmentDraft && typeof investmentDraft === "object") {
+      normalizedInvestmentForm = { ...investmentDefault, ...investmentDraft };
+      INVESTMENT_SOURCE_FIELDS.forEach(([field]) => {
+        normalizedInvestmentForm[field] = hasMeaningfulSourceEntries(investmentDraft[field])
+          ? investmentDraft[field].map((value) => String(value ?? ""))
+          : [""];
+      });
+
+      normalizedInvestmentForm.recorded_at =
+        typeof investmentDraft.recorded_at === "string"
+          ? investmentDraft.recorded_at
+          : investmentDefault.recorded_at;
+    }
+
+    const bitcoinDefault = createDefaultBitcoinForm();
+    const bitcoinDraft = readDraftFromStorage(BITCOIN_FORM_DRAFT_STORAGE_KEY(user._id), null);
+    const normalizedBitcoinForm =
+      bitcoinDraft && typeof bitcoinDraft === "object"
+        ? {
+            ...bitcoinDefault,
+            ...bitcoinDraft,
+            sources: hasMeaningfulSourceEntries(bitcoinDraft.sources)
+              ? bitcoinDraft.sources.map((value) => String(value ?? ""))
+              : [""],
+            recorded_at:
+              typeof bitcoinDraft.recorded_at === "string"
+                ? bitcoinDraft.recorded_at
+                : bitcoinDefault.recorded_at,
+          }
+        : bitcoinDefault;
+
+    setEditingInvestmentId("");
+    setInvestmentForm(normalizedInvestmentForm);
+    setBitcoinForm(normalizedBitcoinForm);
+    setIsInvestmentFormPinnedBlank(false);
+    setIsBitcoinFormPinnedBlank(false);
+    setFormsHydratedUserId(user._id);
+  }, [user?._id]);
+
+  useEffect(() => {
+    if (user && formsHydratedUserId === user._id) {
       writeDraftToStorage(INVESTMENT_FORM_DRAFT_STORAGE_KEY(user._id), investmentForm);
     }
-  }, [investmentForm, user]);
+  }, [investmentForm, user, formsHydratedUserId]);
 
   useEffect(() => {
-    if (user) {
-      writeDraftToStorage(INVESTMENT_FORM_PINNED_BLANK_STORAGE_KEY(user._id), isInvestmentFormPinnedBlank);
-    }
-  }, [isInvestmentFormPinnedBlank, user]);
-
-  useEffect(() => {
-    if (user) {
+    if (user && formsHydratedUserId === user._id) {
       writeDraftToStorage(BITCOIN_FORM_DRAFT_STORAGE_KEY(user._id), bitcoinForm);
     }
-  }, [bitcoinForm, user]);
-
-  useEffect(() => {
-    if (user) {
-      writeDraftToStorage(BITCOIN_FORM_PINNED_BLANK_STORAGE_KEY(user._id), isBitcoinFormPinnedBlank);
-    }
-  }, [isBitcoinFormPinnedBlank, user]);
+  }, [bitcoinForm, user, formsHydratedUserId]);
 
   useEffect(() => {
     if (!isAdmin && activePage === "manage-users") {
       setActivePage("add-investment");
     }
   }, [activePage, isAdmin]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setLocalTimeNow(new Date());
+    }, 60000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    if (!isProfilePictureMenuOpen) return;
+
+    const handleDocumentClick = (event) => {
+      if (!profilePictureMenuRef.current?.contains(event.target)) {
+        setIsProfilePictureMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => document.removeEventListener("mousedown", handleDocumentClick);
+  }, [isProfilePictureMenuOpen]);
+
+  useEffect(() => {
+    if (!isUserMenuOpen) return;
+
+    const handleDocumentClick = (event) => {
+      if (!userMenuRef.current?.contains(event.target)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => document.removeEventListener("mousedown", handleDocumentClick);
+  }, [isUserMenuOpen]);
+
+  useEffect(() => {
+    if (!isNavMenuOpen) return;
+
+    const handleDocumentClick = (event) => {
+      if (!navMenuRef.current?.contains(event.target)) {
+        setIsNavMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => document.removeEventListener("mousedown", handleDocumentClick);
+  }, [isNavMenuOpen]);
 
   const latestNetWorth = useMemo(() => {
     if (!history.length) return 0;
@@ -331,6 +426,16 @@ function App() {
     if (!bitcoinTopPercentHistory.length) return null;
     return bitcoinTopPercentHistory[bitcoinTopPercentHistory.length - 1].top_percent;
   }, [bitcoinTopPercentHistory]);
+
+  const greetingText = useMemo(() => {
+    const hour = localTimeNow.getHours();
+    let greeting = "Good evening";
+
+    if (hour < 12) greeting = "Good morning";
+    else if (hour < 17) greeting = "Good afternoon";
+
+    return `${greeting}, ${user?.username || "User"}`;
+  }, [localTimeNow, user?.username]);
 
   const worldPopulationValue = useMemo(() => Number(worldPopulation || 0), [worldPopulation]);
 
@@ -470,15 +575,13 @@ function App() {
   useEffect(() => {
     if (editingInvestmentId) return;
     if (isInvestmentFormPinnedBlank) return;
-    if (hasMeaningfulInvestmentDraft(investmentForm)) return;
     setInvestmentForm(createInvestmentFormFromEntry(latestInvestmentEntry));
-  }, [latestInvestmentEntry, editingInvestmentId, investmentForm, isInvestmentFormPinnedBlank]);
+  }, [latestInvestmentEntry, editingInvestmentId, isInvestmentFormPinnedBlank]);
 
   useEffect(() => {
     if (isBitcoinFormPinnedBlank) return;
-    if (hasMeaningfulBitcoinDraft(bitcoinForm)) return;
     setBitcoinForm(createBitcoinFormFromEntry(latestBitcoinHoldingEntry));
-  }, [latestBitcoinHoldingEntry, bitcoinForm, isBitcoinFormPinnedBlank]);
+  }, [latestBitcoinHoldingEntry, isBitcoinFormPinnedBlank]);
 
   const assetPieData = useMemo(() => {
     if (!selectedInvestmentEntry) {
@@ -524,15 +627,61 @@ function App() {
     };
   }, [selectedCombinedEntry]);
 
-  const resetAlerts = () => {
-    setMessage("");
-    setError("");
+  useEffect(() => {
+    return () => {
+      toastTimeoutsRef.current.forEach(({ exitTimeoutId, removeTimeoutId }) => {
+        window.clearTimeout(exitTimeoutId);
+        window.clearTimeout(removeTimeoutId);
+      });
+      toastTimeoutsRef.current.clear();
+    };
+  }, []);
+
+  const addNotification = (text, type = "info") => {
+    if (!text) return;
+
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    setNotifications((prev) => [...prev, { id, text, type, isLeaving: false }]);
+
+    const exitTimeoutId = window.setTimeout(() => {
+      setNotifications((prev) =>
+        prev.map((notification) =>
+          notification.id === id ? { ...notification, isLeaving: true } : notification
+        )
+      );
+
+      const removeTimeoutId = window.setTimeout(() => {
+        setNotifications((prev) => prev.filter((notification) => notification.id !== id));
+        toastTimeoutsRef.current.delete(id);
+      }, TOAST_EXIT_DURATION_MS);
+
+      const existing = toastTimeoutsRef.current.get(id) || {};
+      toastTimeoutsRef.current.set(id, { ...existing, removeTimeoutId });
+    }, TOAST_DURATION_MS);
+
+    toastTimeoutsRef.current.set(id, { exitTimeoutId });
   };
 
-  const showFormSubmissionPopup = (text, isSuccess = true) => {
-    const title = isSuccess ? "Success" : "Submission failed";
-    window.alert(`${title}: ${text}`);
+  const setMessage = (text) => addNotification(text, "success");
+  const setError = (text) => addNotification(text, "error");
+
+  const resetAlerts = () => {
+    // Toast notifications auto-dismiss; no manual reset required.
   };
+
+  const toastNotificationRegion = (
+    <div className="toast-container" aria-live="polite" aria-atomic="true">
+      {notifications.map((notification) => (
+        <div
+          key={notification.id}
+          className={`toast-notification ${notification.type === "error" ? "toast-error" : "toast-success"} ${notification.isLeaving ? "leaving" : ""}`}
+        >
+          {notification.text}
+        </div>
+      ))}
+    </div>
+  );
 
   const loadCurrentUser = async (authToken) => {
     try {
@@ -668,11 +817,9 @@ function App() {
       setUser(response.user);
       const successMessage = `Welcome ${response.user.username}!`;
       setMessage(successMessage);
-      showFormSubmissionPopup(successMessage, true);
       console.log("[APP] Login successful");
     } catch (err) {
       setError(err.message);
-      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -681,6 +828,8 @@ function App() {
     setUser(null);
     setUsers([]);
     setInvestments([]);
+    setInvestmentForm(createDefaultInvestmentForm());
+    setEditingInvestmentId("");
     setHistory([]);
     setIsInvestmentFormPinnedBlank(false);
     setBitcoinForm(createDefaultBitcoinForm());
@@ -694,6 +843,9 @@ function App() {
     setCombinedAssetTimelineIndex(0);
     setCombinedBitcoinHistory([]);
     setCombinedBitcoinTopPercentHistory([]);
+    setIsProfilePictureMenuOpen(false);
+    setIsProfilePicturePreviewOpen(false);
+    setIsUserMenuOpen(false);
     localStorage.removeItem("token");
   };
 
@@ -710,6 +862,29 @@ function App() {
     }
   };
 
+  const toggleUserMenu = () => {
+    setIsUserMenuOpen((prev) => !prev);
+  };
+
+  const toggleProfilePictureMenu = () => {
+    if (isUploadingProfilePicture) return;
+    setIsProfilePictureMenuOpen((prev) => !prev);
+  };
+
+  const toggleNavMenu = () => {
+    setIsNavMenuOpen((prev) => !prev);
+  };
+
+  const handleViewProfilePicture = () => {
+    setIsProfilePictureMenuOpen(false);
+    setIsProfilePicturePreviewOpen(true);
+  };
+
+  const handleEditProfilePicture = () => {
+    setIsProfilePictureMenuOpen(false);
+    profilePictureInputRef.current?.click();
+  };
+
   const handleCreateUser = async (event) => {
     event.preventDefault();
     try {
@@ -717,12 +892,10 @@ function App() {
       await api.createUser(token, newUserForm);
       const successMessage = "User created successfully";
       setMessage(successMessage);
-      showFormSubmissionPopup(successMessage, true);
       setNewUserForm({ username: "", password: "", role: "user" });
       loadUsers();
     } catch (err) {
       setError(err.message);
-      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -800,12 +973,10 @@ function App() {
         await api.updateInvestment(token, editingInvestmentId, payload);
         const successMessage = "Investment updated successfully";
         setMessage(successMessage);
-        showFormSubmissionPopup(successMessage, true);
       } else {
         await api.createInvestment(token, payload);
         const successMessage = "Investment saved successfully";
         setMessage(successMessage);
-        showFormSubmissionPopup(successMessage, true);
       }
 
       setIsInvestmentFormPinnedBlank(false);
@@ -816,7 +987,6 @@ function App() {
       loadCombinedData(worldPopulation);
     } catch (err) {
       setError(err.message);
-      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -880,7 +1050,6 @@ function App() {
       await api.createBitcoinHolding(token, payload);
       const successMessage = "Bitcoin holding saved successfully";
       setMessage(successMessage);
-      showFormSubmissionPopup(successMessage, true);
       setIsBitcoinFormPinnedBlank(false);
       setBitcoinForm(createDefaultBitcoinForm());
       loadBitcoinHoldings();
@@ -889,7 +1058,6 @@ function App() {
       loadCombinedData(worldPopulation);
     } catch (err) {
       setError(err.message);
-      showFormSubmissionPopup(err.message, false);
     }
   };
 
@@ -938,6 +1106,7 @@ function App() {
   if (!token || !user) {
     return (
       <div className="page centered">
+        {toastNotificationRegion}
         <div className="card">
           <h1>Investment Tracker</h1>
           <p>Please login to continue.</p>
@@ -974,69 +1143,164 @@ function App() {
             </label>
             <button type="submit">Login</button>
           </form>
-          {error && <p className="error">{error}</p>}
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`page ${isViewportFitTab ? "fit-screen-page" : ""}`}>
-      <header className="header">
-        <div className="user-info">
-          <button
-            type="button"
-            className="profile-picture-button"
-            title={isUploadingProfilePicture ? "Uploading..." : "Upload / change profile picture"}
-            onClick={() => profilePictureInputRef.current?.click()}
-            disabled={isUploadingProfilePicture}
-          >
-            <img
-              src={getProfilePictureSrc(user.profile_picture_url)}
-              alt={`${user.username} profile picture`}
-              className="profile-picture-image"
+    <div className="page">
+      {toastNotificationRegion}
+      <header className="top-shell">
+        <div className="header">
+          <div className="brand-block">
+            <div className="brand-title-row">
+              <span className="app-logo" aria-hidden="true">
+                <svg viewBox="0 0 64 64" role="img">
+                  <path
+                    d="M8 20 L20 30 L31 22 L41 27 L53 14"
+                    fill="none"
+                    stroke="#0ea5e9"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M47 14 H53 V20"
+                    fill="none"
+                    stroke="#0ea5e9"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="8" cy="20" r="2.2" fill="#0ea5e9" />
+                  <circle cx="20" cy="30" r="2.2" fill="#0ea5e9" />
+                  <circle cx="31" cy="22" r="2.2" fill="#0ea5e9" />
+                  <circle cx="41" cy="27" r="2.2" fill="#0ea5e9" />
+                  <circle cx="53" cy="14" r="2.2" fill="#0ea5e9" />
+                </svg>
+              </span>
+              <h1>Investment Tracker Dashboard</h1>
+            </div>
+          </div>
+
+          <div className="nav-shell" ref={navMenuRef}>
+            <button
+              type="button"
+              className="hamburger-button"
+              onClick={toggleNavMenu}
+              aria-label="Toggle navigation menu"
+              aria-expanded={isNavMenuOpen}
+            >
+              ☰
+            </button>
+            <nav className={`top-nav inline-nav ${isNavMenuOpen ? "open" : ""}`}>
+              {navItems.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`nav-button ${activePage === item.key ? "active" : ""}`}
+                  onClick={() => {
+                    setActivePage(item.key);
+                    setIsNavMenuOpen(false);
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+
+          <div className="header-actions">
+            <div className="greeting-menu" ref={userMenuRef}>
+              <button
+                type="button"
+                className="greeting-button"
+                onClick={toggleUserMenu}
+                aria-haspopup="menu"
+                aria-expanded={isUserMenuOpen}
+              >
+                <span>{greetingText}</span>
+                <span className="menu-caret">▾</span>
+              </button>
+              {isUserMenuOpen && (
+                <div className="greeting-dropdown" role="menu" aria-label="User options">
+                  <p className="greeting-dropdown-role">Signed in as {user.role}</p>
+                  <button
+                    type="button"
+                    className="greeting-dropdown-item"
+                    role="menuitem"
+                    onClick={handleLogout}
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="profile-picture-menu" ref={profilePictureMenuRef}>
+              <button
+                type="button"
+                className="profile-picture-button"
+                title={isUploadingProfilePicture ? "Uploading..." : "Profile picture options"}
+                onClick={toggleProfilePictureMenu}
+                disabled={isUploadingProfilePicture}
+                aria-haspopup="menu"
+                aria-expanded={isProfilePictureMenuOpen}
+              >
+                <img
+                  src={getProfilePictureSrc(user.profile_picture_url)}
+                  alt={`${user.username} profile picture`}
+                  className="profile-picture-image"
+                />
+              </button>
+
+              {isProfilePictureMenuOpen && (
+                <div className="profile-picture-dropdown" role="menu" aria-label="Profile picture options">
+                  <button
+                    type="button"
+                    className="profile-picture-dropdown-item"
+                    role="menuitem"
+                    onClick={handleViewProfilePicture}
+                  >
+                    View picture
+                  </button>
+                  <button
+                    type="button"
+                    className="profile-picture-dropdown-item"
+                    role="menuitem"
+                    onClick={handleEditProfilePicture}
+                    disabled={isUploadingProfilePicture}
+                  >
+                    Edit picture
+                  </button>
+                </div>
+              )}
+            </div>
+            <input
+              ref={profilePictureInputRef}
+              type="file"
+              accept="image/*"
+              className="visually-hidden"
+              onChange={handleProfilePictureSelect}
             />
-          </button>
-          <input
-            ref={profilePictureInputRef}
-            type="file"
-            accept="image/*"
-            className="visually-hidden"
-            onChange={handleProfilePictureSelect}
-          />
-          <div>
-            <h1>Investment Tracker Dashboard</h1>
-            <p>
-              Logged in as <strong>{user.username}</strong> ({user.role})
-            </p>
-            <p>
-              Latest Net Worth: <strong>{asCurrency(latestNetWorth)}</strong>
-            </p>
-            <p>
-              Latest Bitcoin: <strong>{asBitcoin(latestBitcoin)} BTC</strong>
-              {" | "}
-              Top Percent: <strong>{asPercent(latestTopPercent)}</strong>
-            </p>
           </div>
         </div>
-        <button onClick={handleLogout}>Logout</button>
       </header>
 
-      <nav className="top-nav">
-        {navItems.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={`nav-button ${activePage === item.key ? "active" : ""}`}
-            onClick={() => setActivePage(item.key)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
-
-      {message && <p className="message">{message}</p>}
-      {error && <p className="error">{error}</p>}
+      <section className="modern-stats-grid" aria-label="Latest summary stats">
+        <article className="modern-stat-card net-worth-stat">
+          <p className="modern-stat-label">Latest Net Worth</p>
+          <p className="modern-stat-value">{asCurrency(latestNetWorth)}</p>
+        </article>
+        <article className="modern-stat-card bitcoin-stat">
+          <p className="modern-stat-label">Latest Bitcoin</p>
+          <p className="modern-stat-value">{asBitcoin(latestBitcoin)} BTC</p>
+        </article>
+        <article className="modern-stat-card top-percent-stat">
+          <p className="modern-stat-label">Top Percent</p>
+          <p className="modern-stat-value">{asPercent(latestTopPercent)}</p>
+        </article>
+      </section>
 
       <main className="page-content">
         {activePage === "add-investment" && (
@@ -1240,14 +1504,14 @@ function App() {
         )}
 
         {activePage === "net-worth-trend" && (
-          <section className="card page-card viewport-fit-card">
+          <section className="card page-card">
             <h2>Net Worth Trend</h2>
             <SimpleNetWorthChart data={history} />
           </section>
         )}
 
         {activePage === "asset-allocation" && (
-          <section className="card page-card viewport-fit-card">
+          <section className="card page-card">
             <h2>Latest Asset Allocation (Stocks + Gold + Bitcoin)</h2>
             {investmentsByRecordedDate.length > 0 && (
               <div className="asset-timeline-control">
@@ -1529,6 +1793,35 @@ function App() {
           </section>
         )}
       </main>
+
+      {isProfilePicturePreviewOpen && (
+        <div
+          className="profile-picture-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Profile picture preview"
+          onClick={() => setIsProfilePicturePreviewOpen(false)}
+        >
+          <div className="profile-picture-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="profile-picture-modal-header">
+              <h3>Profile Picture</h3>
+              <button
+                type="button"
+                className="profile-picture-modal-close"
+                onClick={() => setIsProfilePicturePreviewOpen(false)}
+                aria-label="Close profile picture preview"
+              >
+                ✕
+              </button>
+            </div>
+            <img
+              src={getProfilePictureSrc(user.profile_picture_url)}
+              alt={`${user.username} profile preview`}
+              className="profile-picture-preview-image"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
