@@ -26,6 +26,7 @@ const DEFAULT_WORLD_POPULATION = 8200000000;
 const TOAST_DURATION_MS = 3000;
 const TOAST_EXIT_DURATION_MS = 350;
 const MIN_PROFILE_CROP_SIZE_PERCENT = 15;
+const THEME_STORAGE_KEY = "investment_tracker_theme";
 const DEFAULT_PROFILE_PICTURE =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='60' fill='%23e2e8f0'/%3E%3Ccircle cx='60' cy='44' r='22' fill='%2394a3b8'/%3E%3Cpath d='M24 100c6-19 22-30 36-30s30 11 36 30' fill='%2394a3b8'/%3E%3C/svg%3E";
 const INVESTMENT_FORM_DRAFT_STORAGE_KEY = (userId) => `investment_tracker_investment_form_draft_${userId}`;
@@ -153,6 +154,15 @@ const toISTDateTimeLocalValue = (value) => {
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 function App() {
+  const getInitialTheme = () => {
+    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (storedTheme === "light" || storedTheme === "dark") {
+      return storedTheme;
+    }
+
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+  };
+
   const getCurrentISTDateTimeLocalValue = () => toISTDateTimeLocalValue(new Date());
 
   const createDefaultInvestmentForm = () => ({
@@ -174,6 +184,7 @@ function App() {
   });
 
   const [token, setToken] = useState(localStorage.getItem("token") || "");
+  const [theme, setTheme] = useState(getInitialTheme);
   const [user, setUser] = useState(null);
   const profilePictureInputRef = useRef(null);
   const profilePictureMenuRef = useRef(null);
@@ -283,6 +294,11 @@ function App() {
     { key: "combined-stats", label: "Combined Statistics" },
     ...(isAdmin ? [{ key: "manage-users", label: "Admin - Manage Users" }] : []),
   ];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!token) return;
@@ -982,6 +998,10 @@ function App() {
     setIsNavMenuOpen((prev) => !prev);
   };
 
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
   const handleViewProfilePicture = () => {
     setIsProfilePictureMenuOpen(false);
     closeProfileCropModal();
@@ -1333,6 +1353,16 @@ function App() {
       <div className="page centered">
         {toastNotificationRegion}
         <div className="card">
+          <div className="auth-theme-toggle-row">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              {theme === "dark" ? "☀️ Light mode" : "🌙 Dark mode"}
+            </button>
+          </div>
           <h1>Investment Tracker</h1>
           <p>Please login to continue.</p>
           <form onSubmit={handleLogin} className="form-grid">
@@ -1437,6 +1467,14 @@ function App() {
           </div>
 
           <div className="header-actions">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+            </button>
             <div className="greeting-menu" ref={userMenuRef}>
               <button
                 type="button"
@@ -1532,7 +1570,7 @@ function App() {
           <section className="card page-card">
           <h2>{editingInvestmentId ? "Edit Investment" : "Add Investment"}</h2>
           <p className="hint">Enter all amounts in ₹ Lakh.</p>
-          <form onSubmit={handleInvestmentSubmit} className="form-grid">
+          <form onSubmit={handleInvestmentSubmit} className="form-grid investment-form-grid">
             {INVESTMENT_SOURCE_FIELDS.map(([key, label]) => (
               <div key={key} className="source-group">
                 <div className="row source-group-header">
@@ -1554,10 +1592,12 @@ function App() {
                       {investmentForm[key].length > 1 && (
                         <button
                           type="button"
-                          className="danger"
+                          className="remove-source-btn"
+                          aria-label="Remove source"
+                          title="Remove source"
                           onClick={() => removeSourceInput(key, index)}
                         >
-                          Remove
+                          🗑
                         </button>
                       )}
                     </div>
@@ -1578,7 +1618,7 @@ function App() {
               />
             </label>
 
-            <div className="row">
+            <div className="row form-actions-row">
               <button type="submit">{editingInvestmentId ? "Update" : "Save"} Investment</button>
               <button
                 type="button"
@@ -1610,7 +1650,7 @@ function App() {
             <h2>Bitcoin Holdings</h2>
             <p className="hint">Add all bitcoin sources. Up to 8 decimals are supported.</p>
 
-            <form onSubmit={handleBitcoinSubmit} className="form-grid">
+            <form onSubmit={handleBitcoinSubmit} className="form-grid bitcoin-form-grid">
               <div className="source-group">
                 <div className="row source-group-header">
                   <label>Bitcoin Sources (BTC)</label>
@@ -1632,10 +1672,12 @@ function App() {
                       {bitcoinForm.sources.length > 1 && (
                         <button
                           type="button"
-                          className="danger"
+                          className="remove-source-btn"
+                          aria-label="Remove source"
+                          title="Remove source"
                           onClick={() => removeBitcoinSourceInput(index)}
                         >
-                          Remove
+                          🗑
                         </button>
                       )}
                     </div>
@@ -1655,7 +1697,7 @@ function App() {
                 />
               </label>
 
-              <div className="row">
+              <div className="row form-actions-row">
                 <button type="submit">Save Bitcoin Holding</button>
                 <button
                   type="button"
@@ -1678,28 +1720,45 @@ function App() {
             </form>
 
             <section className="bitcoin-graphs">
-              <h3>Bitcoin Over Time</h3>
-              <SimpleBitcoinHistoryChart data={bitcoinHistory} />
-
-              <div className="bitcoin-percent-header row">
-                <h3>Top Percent by Bitcoin Holdings</h3>
-                <label className="world-population-input">
-                  World Population
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={worldPopulation}
-                    onChange={(event) => setWorldPopulation(event.target.value)}
-                  />
-                </label>
-              </div>
-              <p className="hint">
-                Formula used: top_percent = (21,000,000 / (W × B)) × 100, where W = world population and B = bitcoin held.
-              </p>
-              <SimpleTopPercentChart
-                data={bitcoinTopPercentHistory}
-                worldPopulation={worldPopulationValue}
+              <ChartCarousel
+                slides={[
+                  {
+                    key: "btc-history",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <h3>Bitcoin Over Time</h3>
+                        <SimpleBitcoinHistoryChart data={bitcoinHistory} />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "btc-top-percent",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <div className="bitcoin-percent-header row">
+                          <h3>Top Percent by Bitcoin Holdings</h3>
+                          <label className="world-population-input">
+                            World Population
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={worldPopulation}
+                              onChange={(event) => setWorldPopulation(event.target.value)}
+                            />
+                          </label>
+                        </div>
+                        <p className="hint">
+                          Formula used: top_percent = (21,000,000 / (W × B)) × 100, where W = world population and B = bitcoin held.
+                        </p>
+                        <SimpleTopPercentChart
+                          data={bitcoinTopPercentHistory}
+                          worldPopulation={worldPopulationValue}
+                        />
+                      </div>
+                    ),
+                  },
+                ]}
               />
 
               {bitcoinHoldings.length > 0 && (
@@ -1865,62 +1924,89 @@ function App() {
             </section>
 
             <section className="bitcoin-graphs">
-              <h3>Combined Net Worth Trend</h3>
-              <SimpleNetWorthChart data={combinedNetWorthHistory} />
-
-              <h3>Combined Bitcoin Over Time</h3>
-              <SimpleBitcoinHistoryChart data={combinedBitcoinHistory} />
-
-              <div className="bitcoin-percent-header row">
-                <h3>Combined Top Percent by Bitcoin Holdings</h3>
-                <label className="world-population-input">
-                  World Population
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={worldPopulation}
-                    onChange={(event) => setWorldPopulation(event.target.value)}
-                  />
-                </label>
-              </div>
-              <SimpleTopPercentChart
-                data={combinedBitcoinTopPercentHistory}
-                worldPopulation={worldPopulationValue}
+              <ChartCarousel
+                slides={[
+                  {
+                    key: "combined-net-worth",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <h3>Combined Net Worth Trend</h3>
+                        <SimpleNetWorthChart data={combinedNetWorthHistory} />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "combined-bitcoin-history",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <h3>Combined Bitcoin Over Time</h3>
+                        <SimpleBitcoinHistoryChart data={combinedBitcoinHistory} />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "combined-top-percent",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <div className="bitcoin-percent-header row">
+                          <h3>Combined Top Percent by Bitcoin Holdings</h3>
+                          <label className="world-population-input">
+                            World Population
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={worldPopulation}
+                              onChange={(event) => setWorldPopulation(event.target.value)}
+                            />
+                          </label>
+                        </div>
+                        <SimpleTopPercentChart
+                          data={combinedBitcoinTopPercentHistory}
+                          worldPopulation={worldPopulationValue}
+                        />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "combined-asset-allocation",
+                    content: (
+                      <div className="chart-carousel-panel">
+                        <h3>Combined Asset Allocation Timeline (Stocks + Gold + Bitcoin)</h3>
+                        {combinedTimelineByRecordedDate.length > 0 && (
+                          <div className="asset-timeline-control">
+                            <label htmlFor="combinedAssetTimelineSlider">
+                              Record: <strong>{combinedAssetTimelineIndex + 1}</strong> / {combinedTimelineByRecordedDate.length}
+                            </label>
+                            <input
+                              id="combinedAssetTimelineSlider"
+                              type="range"
+                              min="0"
+                              max={Math.max(combinedTimelineByRecordedDate.length - 1, 0)}
+                              step="1"
+                              value={Math.min(
+                                combinedAssetTimelineIndex,
+                                Math.max(combinedTimelineByRecordedDate.length - 1, 0)
+                              )}
+                              onChange={(event) => setCombinedAssetTimelineIndex(Number(event.target.value))}
+                            />
+                            <p className="hint">
+                              Showing combined record date: {selectedCombinedEntry?.recorded_at
+                                ? formatISTDateTime(selectedCombinedEntry.recorded_at)
+                                : "N/A"}
+                            </p>
+                          </div>
+                        )}
+                        <SimpleAssetPieChart
+                          total={combinedAssetPieData.total}
+                          slices={combinedAssetPieData.slices}
+                          recordedAt={selectedCombinedEntry?.recorded_at}
+                        />
+                      </div>
+                    ),
+                  },
+                ]}
               />
-
-              <section className="asset-pie-section">
-                <h3>Combined Asset Allocation Timeline (Stocks + Gold + Bitcoin)</h3>
-                {combinedTimelineByRecordedDate.length > 0 && (
-                  <div className="asset-timeline-control">
-                    <label htmlFor="combinedAssetTimelineSlider">
-                      Record: <strong>{combinedAssetTimelineIndex + 1}</strong> / {combinedTimelineByRecordedDate.length}
-                    </label>
-                    <input
-                      id="combinedAssetTimelineSlider"
-                      type="range"
-                      min="0"
-                      max={Math.max(combinedTimelineByRecordedDate.length - 1, 0)}
-                      step="1"
-                      value={Math.min(
-                        combinedAssetTimelineIndex,
-                        Math.max(combinedTimelineByRecordedDate.length - 1, 0)
-                      )}
-                      onChange={(event) => setCombinedAssetTimelineIndex(Number(event.target.value))}
-                    />
-                    <p className="hint">
-                      Showing combined record date: {selectedCombinedEntry?.recorded_at
-                        ? formatISTDateTime(selectedCombinedEntry.recorded_at)
-                        : "N/A"}
-                    </p>
-                  </div>
-                )}
-                <SimpleAssetPieChart
-                  total={combinedAssetPieData.total}
-                  slices={combinedAssetPieData.slices}
-                  recordedAt={selectedCombinedEntry?.recorded_at}
-                />
-              </section>
             </section>
           </section>
         )}
@@ -2144,6 +2230,58 @@ function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChartCarousel({ slides }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const totalSlides = Array.isArray(slides) ? slides.length : 0;
+
+  useEffect(() => {
+    if (!totalSlides) {
+      setActiveIndex(0);
+      return;
+    }
+
+    if (activeIndex > totalSlides - 1) {
+      setActiveIndex(totalSlides - 1);
+    }
+  }, [activeIndex, totalSlides]);
+
+  if (!totalSlides) return null;
+
+  const currentSlide = slides[activeIndex];
+
+  return (
+    <div className="chart-carousel" aria-label="Chart carousel">
+      <div className="chart-carousel-controls">
+        <button
+          type="button"
+          className="chart-carousel-arrow"
+          aria-label="Previous chart"
+          onClick={() => setActiveIndex((index) => Math.max(index - 1, 0))}
+          disabled={activeIndex === 0}
+        >
+          ←
+        </button>
+        <p className="chart-carousel-status">
+          Chart {activeIndex + 1} of {totalSlides}
+        </p>
+        <button
+          type="button"
+          className="chart-carousel-arrow"
+          aria-label="Next chart"
+          onClick={() => setActiveIndex((index) => Math.min(index + 1, totalSlides - 1))}
+          disabled={activeIndex === totalSlides - 1}
+        >
+          →
+        </button>
+      </div>
+
+      <div className="chart-carousel-slide" key={currentSlide.key || activeIndex}>
+        {currentSlide.content}
+      </div>
     </div>
   );
 }
