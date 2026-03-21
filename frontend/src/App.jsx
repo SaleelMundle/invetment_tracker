@@ -1597,7 +1597,7 @@ function App() {
                           title="Remove source"
                           onClick={() => removeSourceInput(key, index)}
                         >
-                          🗑
+                          -
                         </button>
                       )}
                     </div>
@@ -1677,7 +1677,7 @@ function App() {
                           title="Remove source"
                           onClick={() => removeBitcoinSourceInput(index)}
                         >
-                          🗑
+                          -
                         </button>
                       )}
                     </div>
